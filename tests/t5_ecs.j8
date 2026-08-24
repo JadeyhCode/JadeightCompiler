@@ -1,0 +1,81 @@
+// t5_ecs.j8 — ECS：spawn/add/get/has/remove/despawn/alive/entity_count/system
+component Pos {
+    i32 x;
+    i32 y;
+}
+
+component Vel {
+    i32 vx;
+    i32 vy;
+}
+
+component Health {
+    i32 hp;
+}
+
+system Physics: Pos, Vel {
+    fn update(ent e) {
+        get<Pos>(e)->x = get<Pos>(e)->x + get<Vel>(e)->vx;
+        get<Pos>(e)->y = get<Pos>(e)->y + get<Vel>(e)->vy;
+    }
+}
+
+system Heal: Health {
+    fn update(ent e) {
+        get<Health>(e)->hp = get<Health>(e)->hp + 1;
+    }
+}
+
+void main() {
+    // 生成实体
+    ent a = spawn();
+    ent b = spawn();
+    print(entity_count());      // 2
+
+    // 添加组件
+    add<Pos>(a, 1, 2);
+    add<Vel>(a, 3, 4);
+    add<Health>(a, 10);
+    add<Pos>(b, 100, 200);
+
+    // 查询
+    print(has<Pos>(a));         // true
+    print(has<Vel>(a));         // true
+    print(has<Health>(a));      // true
+    print(has<Health>(b));      // false
+
+    // 读取组件字段
+    print(get<Pos>(a)->x);      // 1
+    print(get<Pos>(a)->y);      // 2
+
+    // 直接修改组件字段
+    get<Pos>(a)->x = 50;
+    print(get<Pos>(a)->x);      // 50
+
+    // 运行系统（Physics 处理有 Pos+Vel 的实体）
+    run<Physics>();
+    print(get<Pos>(a)->x);      // 53（50+3）
+    print(get<Pos>(a)->y);      // 6（2+4）
+    print(get<Pos>(b)->x);      // 100（b 无 Vel，不被处理）
+
+    // 运行 Heal（处理有 Health 的实体）
+    run<Heal>();
+    print(get<Health>(a)->hp);  // 11
+
+    // 多实体
+    for (u32 i = 0; i < 5; i = i + 1) {
+        ent e = spawn();
+        add<Health>(e, i * 10);
+    }
+    print(entity_count());      // 7
+
+    // 移除组件
+    remove<Vel>(a);
+    print(has<Vel>(a));         // false
+
+    // 销毁实体
+    print(alive(b));            // true
+    despawn(b);
+    print(alive(b));            // false
+    print(entity_count());      // 6
+}

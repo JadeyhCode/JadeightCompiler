@@ -1,0 +1,81 @@
+// t4_protocol.j8 — 协议：静态派发、默认实现、存在类型盒（动态派发）、泛型约束
+protocol Shape {
+    f64 area(this);
+    // 默认实现：未在 impl 中定义的方法使用协议体
+    f64 perimeter(this) {
+        return 0.0;
+    }
+    u32 sides(this);
+}
+
+struct Circle {
+    f64 r;
+}
+
+struct Rect {
+    f64 w;
+    f64 h;
+}
+
+impl Shape for Circle {
+    f64 area(this) {
+        return 3.14159 * this->r * this->r;
+    }
+    u32 sides(this) {
+        return 0;   // 圆无角
+    }
+}
+
+impl Shape for Rect {
+    f64 area(this) {
+        return this->w * this->h;
+    }
+    u32 sides(this) {
+        return 4;
+    }
+}
+
+// 泛型 + 协议约束
+f64 total_area<T: Shape>(T a, T b) {
+    return a.area() + b.area();
+}
+
+void main() {
+    // 结构体初始化
+    Circle c = {2.0};
+    Rect r = {3.0, 4.0};
+
+    // 静态派发（具体类型上的方法调用）
+    print(c.area());        // 12.566360
+    print(r.area());        // 12.000
+    print(r.sides());       // 4
+
+    // 默认实现（Circle 未定义 perimeter → 用协议默认体）
+    print(c.perimeter());   // 0.000
+    print(r.perimeter());   // 0.000
+
+    // 存在类型盒：Shape 类型变量（boxing + witness 表）
+    Shape s1 = c;
+    Shape s2 = r;
+    print(s1.area());       // 动态派发 → 12.566360
+    print(s2.area());       // 动态派发 → 12.000
+    print(s1.sides());      // 0
+    print(s2.sides());      // 4
+
+    // 泛型函数 + 协议约束（静态派发）
+    print(total_area<Circle>(c, c));    // 25.132720
+    print(total_area<Rect>(r, r));      // 24.000
+
+    // 函数参数 + 返回协议值
+    Shape box = c;
+    Shape box2 = box;       // 盒拷贝
+    print(box2.area());     // 12.566360
+
+    // 协议值参与分支
+    u32 n = s2.sides();
+    if (n == 4) {
+        print("quad");
+    } else {
+        print("other");
+    }
+}

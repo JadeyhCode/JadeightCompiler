@@ -1,0 +1,83 @@
+// t7_unroll.j8 — 循环展开：全展开（O2 常量迭代）、#pragma unroll 部分展开
+void main() {
+    // 1. 常量迭代循环：O2 全展开（迭代次数 ≤ unroll-limit）
+    u32 sum = 0;
+    for (u32 i = 0; i < 6; i = i + 1) {
+        sum = sum + i;
+    }
+    print(sum);                   // 15
+
+    // 2. 乘法累加
+    u64 prod = 1;
+    for (u64 k = 1; k <= 5; k = k + 1) {
+        prod = prod * k;
+    }
+    print(prod);                  // 120
+
+    // 3. 步长 2
+    u32 evenSum = 0;
+    for (u32 i = 0; i < 10; i = i + 2) {
+        evenSum = evenSum + i;
+    }
+    print(evenSum);               // 0+2+4+6+8 = 20
+
+    // 4. 递减循环
+    u32 down = 0;
+    for (u32 i = 5; i > 0; i = i - 1) {
+        down = down + i;
+    }
+    print(down);                  // 15
+
+    // 5. 循环体内用循环变量做数组式累加
+    u32 acc = 0;
+    for (u32 i = 1; i <= 4; i = i + 1) {
+        acc = acc + i * i;
+    }
+    print(acc);                   // 30
+
+    // 6. #pragma unroll 3：部分展开（余数 1 + 主循环按 3 因子展开）
+#pragma unroll 3
+    u32 pu = 0;
+    for (u32 i = 0; i < 7; i = i + 1) {
+        pu = pu + i;
+    }
+    print(pu);                    // 21
+
+    // 7. #pragma unroll 4
+#pragma unroll 4
+    u32 pu2 = 0;
+    for (u32 i = 0; i < 10; i = i + 1) {
+        pu2 = pu2 + i * 2;
+    }
+    print(pu2);                   // 2*(0+..+9) = 90
+
+    // 8. 循环变量循环后被使用：不能展开（保持语义）
+    u32 last = 0;
+    for (u32 i = 0; i < 5; i = i + 1) {
+        last = i;
+    }
+    print(last);                  // 4
+
+    // 9. 大循环（超过 unroll-limit 8：不展开，正常运行）
+    u32 big = 0;
+    for (u32 i = 0; i < 100; i = i + 1) {
+        big = big + 1;
+    }
+    print(big);                   // 100
+
+    // 10. 嵌套循环
+    u32 pairs = 0;
+    for (u32 i = 0; i < 3; i = i + 1) {
+        for (u32 j = 0; j < 3; j = j + 1) {
+            pairs = pairs + 1;
+        }
+    }
+    print(pairs);                 // 9
+
+    // 11. 展开后的循环变量常量替换验证
+    u32 combo = 0;
+    for (u32 i = 0; i < 4; i = i + 1) {
+        combo = combo + (i + 10) * 2;
+    }
+    print(combo);                 // 2*(10+11+12+13) = 92
+}

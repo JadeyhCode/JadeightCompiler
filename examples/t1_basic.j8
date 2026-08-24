@@ -1,0 +1,22 @@
+// t1_basic.j8 — 基础表达式、变量、print、类型
+void main() {
+    print(1 + 2 * 3);          // 7
+    u32 x = 5;
+    print(x + 1);              // 6
+    u64 big = 10000000000;
+    print(big);                // 10000000000
+    i32 neg = -7;
+    print(neg);                // -7
+    print(3.5 * 2.0);          // 7.000
+    print("hi");               // h i（每字符一行）
+    print(true);               // true
+    print(10 / 3);             // 3
+    print(10 % 3);             // 1
+    print(1 < 2);              // 1
+    print(5 == 5);             // 1
+    print(5 != 5);             // 0
+    print(2 << 4);             // 32
+    print(255 & 15);           // 15
+    print(0xFF);               // 255
+    print((u32)3.9);           // 3
+}

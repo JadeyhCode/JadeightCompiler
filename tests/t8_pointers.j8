@@ -1,0 +1,78 @@
+// t8_pointers.j8 — 指针、数组、结构体、memcpy
+struct Point {
+    i32 x;
+    i32 y;
+}
+
+struct Rect {
+    Point tl;
+    i32 w;
+    i32 h;
+}
+
+void main() {
+    // 结构体局部变量与字段访问
+    Point p = {3, 4};
+    print(p.x);                  // 3
+    print(p.y);                  // 4
+    p.x = 10;
+    print(p.x);                  // 10
+
+    // 结构体初始化与嵌套结构体（逐字段赋值）
+    Rect r;
+    r.tl.x = 1;
+    r.tl.y = 2;
+    r.w = 5;
+    r.h = 6;
+    print(r.tl.x);               // 1
+    print(r.tl.y);               // 2
+    print(r.w);                  // 5
+    print(r.h);                  // 6
+
+    // 结构体拷贝（值语义）
+    Point p2 = p;
+    print(p2.x);                 // 10
+    print(p2.y);                 // 4
+    p2.x = 99;
+    print(p.x);                  // 10（p 不受影响）
+
+    // 指针：取地址 / 解引用
+    Point* pp = &p;
+    print(pp->x);                // 10
+    print(pp->y);                // 4
+    (*pp).x = 42;
+    print(p.x);                  // 42
+    pp->y = 43;
+    print(p.y);                  // 43
+
+    // 数组（局部数组退化为指针）
+    u32 arr[4];
+    arr[0] = 11;
+    arr[1] = 22;
+    arr[2] = 33;
+    arr[3] = 44;
+    print(arr[0]);               // 11
+    print(arr[2]);               // 33
+
+    // 数组指针运算
+    u32* ap = arr;
+    print(ap[1]);                // 22
+    ap[3] = 55;
+    print(arr[3]);               // 55
+
+    // 指针循环
+    u32 sum = 0;
+    for (u32 i = 0; i < 4; i = i + 1) {
+        sum = sum + arr[i];
+    }
+    print(sum);                  // 11+22+33+55 = 121
+
+    // 函数间指针传递
+    Point* moved = &p;
+    print(moved->x + moved->y);  // 42+43 = 85
+
+    // 空指针
+    Point* nullp = 0;
+    u64 np = (u64)nullp;
+    print(np == 0);              // true
+}

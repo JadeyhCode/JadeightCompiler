@@ -1,0 +1,67 @@
+// t3_functions.j8 — 函数、参数、返回值、递归、多函数调用
+u64 fib(u64 n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+u32 add3(u32 a, u32 b, u32 c) {
+    return a + b + c;
+}
+
+i64 negate(i64 v) {
+    return 0 - v;
+}
+
+f64 celsius(f64 f) {
+    return (f - 32.0) * 5.0 / 9.0;
+}
+
+// 嵌套调用
+u32 square(u32 x) {
+    return x * x;
+}
+
+u32 sumSquares(u32 a, u32 b) {
+    return square(a) + square(b);
+}
+
+// 无返回值函数
+void report(u32 v) {
+    print(v);
+}
+
+void main() {
+    // 递归：斐波那契
+    print(fib(0));     // 0
+    print(fib(1));     // 1
+    print(fib(10));    // 55
+    print(fib(20));    // 6765
+
+    // 多参数
+    print(add3(1, 2, 3));       // 6
+    print(add3(10, 20, 30));    // 60
+
+    // 有符号（整数字面量默认无符号：0 - 7 按 u32 回绕 = 4294967289）
+    print(negate(42));          // -42
+    print(negate(7));           // -7
+
+    // 浮点
+    print(celsius(32.0));       // 0.000
+    print(celsius(212.0));      // 100.000
+
+    // 嵌套调用
+    print(sumSquares(3, 4));    // 25
+    print(sumSquares(5, 12));   // 169
+
+    // void 函数
+    report(777);                // 777
+
+    // 函数返回值参与运算
+    u32 r = add3(1, 1, 1) * 10 + square(2);
+    print(r);                   // 34
+
+    // 深递归（验证栈）
+    print(fib(25));             // 75025
+}
