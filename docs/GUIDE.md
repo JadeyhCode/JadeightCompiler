@@ -39,6 +39,55 @@ void main() {
 
 协议/ECS 示例见 `examples/t2_protocol.j8`、`examples/t3_ecs.j8`。
 
+## 函数
+
+### 定义
+
+```c
+返回类型 函数名(类型 参数, ...) {
+    语句
+    return 表达式;
+}
+```
+
+- 返回类型：`u8/u16/u32/u64`、`i32/i64`、`f64`，或 `void`（无返回值）。
+- 参数一律按**值传递**。
+- 返回值可选；`void` 函数 `return;` 或直接结束即可。
+
+### 完整示例
+
+```c
+u64 fib(u64 n) {                 // 递归：斐波那契
+    if (n < 2) return n;
+    return fib(n - 1) + fib(n - 2);
+}
+u32 add3(u32 a, u32 b, u32 c) { return a + b + c; }   // 多参数
+i64 negate(i64 v) { return 0 - v; }                    // 有符号参数
+f64 celsius(f64 f) { return (f - 32.0) * 5.0 / 9.0; }  // 浮点
+u32 square(u32 x) { return x * x; }
+u32 sumSquares(u32 a, u32 b) { return square(a) + square(b); }  // 嵌套调用
+void report(u32 v) { print(v); }                       // void
+
+void main() {
+    print(fib(20));                 // 6765
+    print(fib(25));                 // 75025（深递归，验证栈）
+    print(add3(1, 2, 3));           // 6
+    print(negate(42));              // -42
+    print(celsius(212.0));          // 100.000
+    print(sumSquares(3, 4));        // 25
+    report(777);                    // 777
+    u32 r = add3(1, 1, 1) * 10 + square(2);  // 返回值参与运算
+    print(r);                       // 34
+}
+```
+
+### 注意点
+
+- **有符号负数**：整数字面量默认无符号，`0 - v` 对 `i32`/`i64` 参数是安全的
+  （类型由参数决定，回绕后按有符号解释）；字面量请写 `-7` 或显式 `i32`。
+- **递归深度**：栈可支撑深层递归（如 `fib(25)`）。
+- 函数先定义后调用；`main` 为程序入口，`void main()`。
+
 ## 语言要点
 
 - 整数字面量默认无符号：`0 - 7` 按 u32 回绕；要负数请写 `-7` 或显式 `i32` 类型。
