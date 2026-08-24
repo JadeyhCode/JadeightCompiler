@@ -17,7 +17,7 @@ add_executable(j8c
     src/optimize.cpp
     src/codegen.cpp
 )
-target_include_directories(j8c PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR}/../JadeightAbstractionCode​)
+target_include_directories(j8c PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR}/../JadeightAbstractionCode)
 target_compile_options(j8c PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 # ---------- j8run：在 Jadeight VM 上运行 .bc 的宿主运行器 ----------
