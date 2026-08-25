@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <dlfcn.h>
 #include <fstream>
 #include <iostream>
@@ -40,7 +41,8 @@ struct ExternSig {
     vector<string> args;
 };
 
-static vector<ffi_cif> g_cifs;   // 保持 cif 存活
+static deque<ffi_cif> g_cifs;   // 保持 cif 存活（deque：push_back 不使已有元素引用失效）
+static vector<vector<ffi_type*>> g_argTypeSets;  // 保持 arg_types 数组存活：ffi_prep_cif 只存指针不拷贝
 static vector<void*> g_handles;  // dlopen 句柄保持存活
 
 static ffi_type* ffiType(const string& t) {
@@ -119,6 +121,7 @@ static void registerExterns(const vector<ExternSig>& sigs, const vector<string>&
             g_cifs.pop_back();
             continue;
         }
+        g_argTypeSets.push_back(std::move(atypes));   // 在 cif 之前存活（cif->arg_types 指向它）
         externFn[idx] = { &cif, fn };
         cout << "j8run: registered extern[" << idx << "] " << s.name << "\n";
     }
