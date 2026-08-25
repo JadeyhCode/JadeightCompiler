@@ -404,12 +404,14 @@ void CodeGen::computeStackSizes() {
     }
 
     if (recursion) {
-        stackSize_ = opts_.recursionStackSize;
-        scopeSize_ = 64;
+        // --stack 显式指定优先；否则用递归默认栈
+        stackSize_ = opts_.stackSize > 0 ? opts_.stackSize : opts_.recursionStackSize;
+        // 递归深度上限 ≈ stackSize/帧大小；作用域容量按栈大小放大，避免作用域栈越界
+        scopeSize_ = static_cast<uint32_t>(std::max<int64_t>(64, stackSize_ / 8));
     } else {
         int64_t need = maxSp + 1024;
-        stackSize_ = static_cast<uint32_t>(std::max<int64_t>(need, 16384));
-        scopeSize_ = static_cast<uint32_t>(std::max(maxDepth + 8, 8));
+        stackSize_ = static_cast<uint32_t>(opts_.stackSize > 0 ? opts_.stackSize : std::max<int64_t>(need, 16384));
+        scopeSize_ = static_cast<uint32_t>(std::max<int64_t>(std::max(maxDepth + 8, 8), stackSize_ / 8));
     }
 }
 

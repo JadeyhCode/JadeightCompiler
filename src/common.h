@@ -102,7 +102,7 @@ struct CompileOptions {
     int unrollLimit = 8;         // 全展开的迭代数上限
     int ecsCapacity = 4096;
     uint32_t stackSize = 0;      // 0 = 自动计算
-    uint32_t recursionStackSize = 65536;
+    uint32_t recursionStackSize = 1048576; // 递归默认栈 1MB（约 1.5 万层深递归）
     std::string externsPath;     // -emit-externs
 };
 
