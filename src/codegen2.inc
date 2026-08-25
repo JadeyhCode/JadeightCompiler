@@ -1226,10 +1226,16 @@ static int autoExternIndex(Sema* sema, const std::string& name) {
 void CodeGen::externMemcpy(Expr* e, FuncInstance* inst) {
     int idx = autoExternIndex(sema_, "memcpy");
     if (idx < 0) { pushConst(8, 0); return; }
+    // 参数先在调用者作用域求值到 R4..R6，再 SCOPE_PUSH 后压栈：
+    // 否则 mode0 加载会用新作用域基址读到错误槽位
+    int n = static_cast<int>(std::min<size_t>(e->args.size(), 3));
+    for (int i = 0; i < n; ++i) {
+        emitExpr(e->args[i].get(), inst);
+        coerceOnStack(e->args[i]->type, Type::make(TypeKind::U64), inst);
+        popReg(4 + i, 8);
+    }
     ins(OP_SCOPE_PUSH, "", "extern memcpy");
-    emitExpr(e->args[0].get(), inst); coerceOnStack(e->args[0]->type, Type::make(TypeKind::U64), inst);
-    emitExpr(e->args[1].get(), inst); coerceOnStack(e->args[1]->type, Type::make(TypeKind::U64), inst);
-    emitExpr(e->args[2].get(), inst); coerceOnStack(e->args[2]->type, Type::make(TypeKind::U64), inst);
+    for (int i = 0; i < n; ++i) pushReg(4 + i, 8);
     ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 24");
     ins(OP_STACK_PTR_MOVE, "24");
     em_.popD(24);
@@ -1239,9 +1245,12 @@ void CodeGen::externMemcpy(Expr* e, FuncInstance* inst) {
 void CodeGen::externFree(Expr* e, FuncInstance* inst) {
     int idx = autoExternIndex(sema_, "free");
     if (idx < 0) { pushConst(8, 0); return; }
-    ins(OP_SCOPE_PUSH, "", "extern free");
+    // 同 externMemcpy：先求值参数到 R4，再 SCOPE_PUSH 压栈
     emitExpr(e->args[0].get(), inst);
     coerceOnStack(e->args[0]->type, Type::make(TypeKind::U64), inst);
+    popReg(4, 8);
+    ins(OP_SCOPE_PUSH, "", "extern free");
+    pushReg(4, 8);
     ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 8");
     ins(OP_STACK_PTR_MOVE, "8");
     em_.popD(8);

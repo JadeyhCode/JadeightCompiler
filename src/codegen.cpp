@@ -2,6 +2,7 @@
 #include "codegen.h"
 
 #include <cstring>
+#include <set>
 #include <sstream>
 
 namespace j8 {
@@ -418,8 +419,10 @@ void CodeGen::computeStackSizes() {
 void CodeGen::emitDataSection(std::string& asmText) {
     em_.reset(false, &asmText, nullptr);
     em_.comment("=== 数据段 ===");
+    std::set<std::string> emitted; // 去重：与 layoutData 的偏移分配一致（按首次出现顺序）
     for (const auto& s : strings_) {
-        if (!stringRelOff_.count(s)) continue;   // 已去重
+        if (emitted.count(s)) continue; // 重复字面量只发射一次
+        emitted.insert(s);
         em_.comment("string \"" + s + "\"");
         for (unsigned char c : s) em_.dataByte(c);
         em_.dataByte(0);
