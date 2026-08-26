@@ -2,3 +2,6 @@ build/
 *.bc
 *.jasm
 dump_offsets
+cmake-build-debug/
+*.o
+.idea/
