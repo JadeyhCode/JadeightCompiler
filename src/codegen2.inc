@@ -1156,6 +1156,12 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         ins(name == "sqrt" ? OP_SQRT_F64 : OP_LOG_F64);
         return;
     }
+    if (name == "getsystem") {
+        // GET_SYSTEM：压入 u64（低16位=平台，次16位=架构）
+        ins(OP_GET_SYSTEM, "", "getsystem");
+        em_.pushD(8);
+        return;
+    }
     if (name == "memcpy") {
         // 走 extern memcpy
         externMemcpy(e, inst);

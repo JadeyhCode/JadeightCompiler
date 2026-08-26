@@ -1638,6 +1638,12 @@ Type* Sema::checkBuiltin(Expr* e, FuncInstance* inst, const std::string& name) {
         e->type = Type::make(TypeKind::F64);
         return e->type;
     }
+    if (name == "getsystem") {
+        // GET_SYSTEM：返回 u64（低16位=平台，次16位=架构），无参数
+        if (e->args.size() != 0) Diag::error(e->loc, "getsystem takes no arguments");
+        e->type = Type::make(TypeKind::U64);
+        return e->type;
+    }
     if (name == "memcpy") {
         Type* d = arg(0);
         Type* s = arg(1);
