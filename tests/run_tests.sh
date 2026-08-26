@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_tests.sh — J8 编译器回归测试
 # 用法: tests/run_tests.sh [--no-rebuild]
-# 每个 tests/t*.j8（以及 examples/t*.j8）在 -O0 与 -O2 下编译运行，
+# 每个 tests/t*.j8在 -O0 与 -O2 下编译运行，
 # 输出与同名 .expected 逐行比对；任何差异即失败。
 # 注意：-O2 为实验性/不稳定优化级别（见 README「已知问题」），-O0 为可信基线。
 set -u
@@ -24,7 +24,7 @@ pass=0
 fail=0
 failed=()
 
-for src in tests/*.j8 examples/*.j8; do
+for src in tests/*.j8; do
     [ -f "$src" ] || continue
     base="$(basename "$src" .j8)"
     exp="tests/$base.expected"

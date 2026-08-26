@@ -136,8 +136,8 @@ extern i32 puts(u8*);
 ./tests/run_tests.sh
 ```
 
-对 `tests/*.j8` 与 `examples/*.j8` 分别在 `-O0`/`-O2` 下编译运行，输出与同名
-`.expected` 逐行比对。当前 8 个测试 + 2 个示例、`-O0`/`-O2` 共 20 个组合全部通过。
+对 `tests/*.j8` 分别在 `-O0`/`-O2` 下编译运行，输出与同名
+`.expected` 逐行比对。当前 7 个测试文件、`-O0`/`-O2` 共 14 个组合全部通过。
 
 ## 已知问题
 
@@ -157,6 +157,5 @@ extern i32 puts(u8*);
 src/          编译器源码（词法 → 语法 → 语义 → 优化 → 代码生成）
 runtime/      j8run 宿主运行器（复用 Jadeight2 VM 全量实现）
 tests/        回归测试（.j8 + .expected + run_tests.sh）
-examples/     示例程序
 tools/        辅助工具（汇编转储、追踪解释器等）
 ```

@@ -37,7 +37,7 @@ void main() {
 }
 ```
 
-协议/ECS 示例见 `examples/t2_protocol.j8`、`examples/t3_ecs.j8`。
+协议/ECS 测试见 `tests/t4_protocol.j8`、`tests/t5_ecs.j8`。
 
 ## 函数
 
@@ -100,8 +100,8 @@ void main() {
 tests/run_tests.sh
 ```
 
-对 `tests/*.j8` 与 `examples/*.j8` 在 `-O0`/`-O2` 下编译运行并与 `.expected` 逐行比对。
-当前 20/20 全绿（8 测试 + 2 示例 × 2 优化级别）。
+对 `tests/*.j8` 在 `-O0`/`-O2` 下编译运行并与 `.expected` 逐行比对。
+当前 14/14 全绿（7 测试 × 2 优化级别）。
 
 ## 版本历史
 
