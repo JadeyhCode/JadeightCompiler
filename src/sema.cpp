@@ -1644,6 +1644,38 @@ Type* Sema::checkBuiltin(Expr* e, FuncInstance* inst, const std::string& name) {
         e->type = Type::make(TypeKind::U64);
         return e->type;
     }
+    if (name == "dl_reg") {
+        // dl_reg(fnPtr, sigStr) → u32：运行时注册 C 函数（签名串 "rettype(argtypes)"）
+        if (e->args.size() != 2) Diag::error(e->loc, "dl_reg expects (fnPtr, signature)");
+        arg(0); arg(1); // 给参数定型（字符串字面量参数也需要）
+        e->type = Type::make(TypeKind::U32);
+        return e->type;
+    }
+    if (name == "dl_call") {
+        // dl_call(idx, sigLiteral, args...) → 返回类型由签名串字面量决定
+        if (e->args.size() < 3) { Diag::error(e->loc, "dl_call expects (idx, signature, args...)"); e->type = Type::make(TypeKind::U64); return e->type; }
+        arg(0); arg(1); // idx 与签名串定型
+        for (size_t ai = 2; ai < e->args.size(); ++ai) arg(ai); // 值参数定型
+        Expr* sig = e->args[1].get();
+        if (sig->kind != ExprKind::StrLit) { Diag::error(e->loc, "dl_call signature must be a string literal"); e->type = Type::make(TypeKind::U64); return e->type; }
+        std::string s = sig->strVal;
+        size_t lp = s.find('(');
+        TypeKind k = TypeKind::U64;
+        if (lp != std::string::npos) {
+            std::string rn = s.substr(0, lp);
+            if (rn == "u8" || rn == "i8") k = TypeKind::U8;
+            else if (rn == "u16" || rn == "i16") k = TypeKind::U16;
+            else if (rn == "u32") k = TypeKind::U32;
+            else if (rn == "i32") k = TypeKind::I32;
+            else if (rn == "u64") k = TypeKind::U64;
+            else if (rn == "i64") k = TypeKind::I64;
+            else if (rn == "f64") k = TypeKind::F64;
+            else if (rn == "ptr") k = TypeKind::U64;
+            else if (rn == "void") k = TypeKind::Void;
+        }
+        e->type = Type::make(k);
+        return e->type;
+    }
     if (name == "memcpy") {
         Type* d = arg(0);
         Type* s = arg(1);

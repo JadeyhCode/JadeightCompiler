@@ -14,6 +14,36 @@ static bool isComparison(BinaryOp op) {
            op == BinaryOp::Ge || op == BinaryOp::Eq || op == BinaryOp::Ne;
 }
 
+// ---------- dl_reg / dl_call：签名串 "rettype(arg1,arg2,...)" 解析 ----------
+static bool dlParseSig(const std::string& s, std::string& ret, std::vector<std::string>& args) {
+    size_t lp = s.find('(');
+    if (lp == std::string::npos || s.empty() || s.back() != ')') return false;
+    ret = s.substr(0, lp);
+    std::string a = s.substr(lp + 1, s.size() - lp - 2);
+    if (!a.empty()) {
+        size_t start = 0;
+        while (true) {
+            size_t comma = a.find(',', start);
+            args.push_back(a.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+    }
+    return true;
+}
+// 返回类型宽度的 .j8 表示；nullptr = void（无返回值）。ptr 按 u64 宽度处理。
+static Type* dlTypeByName(const std::string& t) {
+    if (t == "u8" || t == "i8") return Type::make(TypeKind::U8);
+    if (t == "u16" || t == "i16") return Type::make(TypeKind::U16);
+    if (t == "u32") return Type::make(TypeKind::U32);
+    if (t == "i32") return Type::make(TypeKind::I32);
+    if (t == "u64") return Type::make(TypeKind::U64);
+    if (t == "i64") return Type::make(TypeKind::I64);
+    if (t == "f64") return Type::make(TypeKind::F64);
+    if (t == "ptr") return Type::make(TypeKind::U64);
+    return nullptr;
+}
+
 static Type* commonArithType(Type* a, Type* b) {
     if (!a || !b) return Type::make(TypeKind::U64);
     auto norm = [](Type* t) -> Type* {
@@ -1160,6 +1190,73 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         // GET_SYSTEM：压入 u64（低16位=平台，次16位=架构）
         ins(OP_GET_SYSTEM, "", "getsystem");
         em_.pushD(8);
+        return;
+    }
+    if (name == "dl_reg") {
+        // dl_reg(fnPtr, sigStr) → u32：参数先在调用者作用域求值到 R4/R5，
+        // 再 SCOPE_PUSH 压栈（fn→base+0, sig→base+8），DL_REG(0,8)
+        emitExpr(e->args[0].get(), inst);
+        coerceOnStack(e->args[0]->type, Type::make(TypeKind::U64), inst);
+        popReg(4, 8);
+        emitExpr(e->args[1].get(), inst);
+        coerceOnStack(e->args[1]->type, Type::make(TypeKind::U64), inst);
+        popReg(5, 8);
+        ins(OP_SCOPE_PUSH, "", "dl_reg");
+        pushReg(4, 8);
+        pushReg(5, 8);
+        ins(OP_DL_REG, "0 8", "dl_reg");
+        em_.pushD(4);                     // VM 压入 u32 索引
+        popReg(0, 4);
+        em_.popD(4);
+        ins(OP_STACK_PTR_MOVE, "16");
+        em_.popD(16);
+        ins(OP_SCOPE_POP);
+        pushReg(0, 4);                    // 结果 u32
+        em_.pushD(4);
+        return;
+    }
+    if (name == "dl_call") {
+        // dl_call(idx, sigLiteral, args...)：签名串决定参数/返回值布局（编译期解析）。
+        // 参数先在调用者作用域求值到 R4..，再 SCOPE_PUSH 压栈（idx→base+0，值参数→base+8..）
+        std::string retName;
+        std::vector<std::string> argNames;
+        if (e->args.size() < 3 || e->args[1]->kind != ExprKind::StrLit ||
+            !dlParseSig(e->args[1]->strVal, retName, argNames)) {
+            pushConst(8, 0);
+            return;
+        }
+        Type* retT = dlTypeByName(retName);
+        int retBytes = retT ? typeWidth(retT) : 0;
+        if (retBytes < 0) retBytes = 0;
+        if (retBytes > 8) retBytes = 8;
+        emitExpr(e->args[0].get(), inst);                       // idx → R4
+        coerceOnStack(e->args[0]->type, Type::make(TypeKind::U32), inst);
+        popReg(4, 4);
+        size_t n = std::min<size_t>(e->args.size() - 2, argNames.size());
+        int argBytes = 0;
+        for (size_t i = 0; i < n; ++i) {
+            Type* at = dlTypeByName(argNames[i]);
+            int w = typeWidth(at ? at : Type::make(TypeKind::U64));
+            emitExpr(e->args[i + 2].get(), inst);
+            coerceOnStack(e->args[i + 2]->type, at ? at : Type::make(TypeKind::U64), inst);
+            popReg(5 + static_cast<int>(i), w);
+            argBytes += w;
+        }
+        ins(OP_SCOPE_PUSH, "", "dl_call");
+        pushReg(4, 4);                                          // idx → base+0
+        for (size_t i = 0; i < n; ++i) {
+            Type* at = dlTypeByName(argNames[i]);
+            int w = typeWidth(at ? at : Type::make(TypeKind::U64));
+            pushReg(5 + static_cast<int>(i), w);
+        }
+        if (retBytes > 0) { ins(OP_NEW_STACK, std::to_string(retBytes), "dl ret"); em_.pushD(retBytes); }
+        // 布局：idx(4B, base+0) → 参数(base+4..) → 返回值(base+4+argBytes)
+        ins(OP_DL_CALL, "0 4 " + std::to_string(4 + argBytes));
+        if (retBytes > 0) loadSlot(0, retBytes, 4 + argBytes);
+        ins(OP_STACK_PTR_MOVE, std::to_string(8 + argBytes + retBytes), "pop dl frame");
+        em_.popD(8 + argBytes + retBytes);
+        ins(OP_SCOPE_POP);
+        if (retBytes > 0) pushReg(0, retBytes);
         return;
     }
     if (name == "memcpy") {
