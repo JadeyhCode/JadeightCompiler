@@ -592,6 +592,8 @@ void Sema::buildTables() {
     if (!functions.count("malloc")) addAutoExtern("malloc", "ptr", {"u64"});
     if (!functions.count("free")) addAutoExtern("free", "void", {"ptr"});
     if (!functions.count("memcpy")) addAutoExtern("memcpy", "void", {"ptr", "ptr", "u64"});
+    if (!functions.count("dlopen")) addAutoExtern("dlopen", "ptr", {"ptr", "i32"});
+    if (!functions.count("dlsym")) addAutoExtern("dlsym", "ptr", {"ptr", "ptr"});
 
     // helper 函数（buildHelpers 已把声明加入 decls，统一注册）
     for (auto& d : prog_->decls) {
@@ -1674,6 +1676,18 @@ Type* Sema::checkBuiltin(Expr* e, FuncInstance* inst, const std::string& name) {
             else if (rn == "void") k = TypeKind::Void;
         }
         e->type = Type::make(k);
+        return e->type;
+    }
+    if (name == "dload") {
+        // dload("x.so") → dlopen("lib/x.so", RTLD_NOW)：动态链接默认根目录 = lib/
+        if (e->args.size() != 1) { Diag::error(e->loc, "dload expects (filename)"); e->type = Type::make(TypeKind::Ptr); return e->type; }
+        Expr* nm = e->args[0].get();
+        if (nm->kind != ExprKind::StrLit) {
+            Diag::error(e->loc, "dload filename must be a string literal");
+        } else {
+            nm->strVal = "lib/" + nm->strVal; // 编译期拼接默认根目录
+        }
+        e->type = Type::makePtr(Type::make(TypeKind::Void)); // ptr（带 pointee，避免 coerceOnStack 崩溃）
         return e->type;
     }
     if (name == "memcpy") {

@@ -43,6 +43,8 @@ static Type* dlTypeByName(const std::string& t) {
     if (t == "ptr") return Type::make(TypeKind::U64);
     return nullptr;
 }
+// 前向声明：autoExternIndex 定义在文件后部
+static int autoExternIndex(Sema* sema, const std::string& name);
 
 static Type* commonArithType(Type* a, Type* b) {
     if (!a || !b) return Type::make(TypeKind::U64);
@@ -1257,6 +1259,28 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         em_.popD(8 + argBytes + retBytes);
         ins(OP_SCOPE_POP);
         if (retBytes > 0) pushReg(0, retBytes);
+        return;
+    }
+    if (name == "dload") {
+        // dload("x.so") → dlopen("lib/x.so", RTLD_NOW)：动态链接默认根目录 = lib/
+        int idx = autoExternIndex(sema_, "dlopen");
+        if (idx < 0) { pushConst(8, 0); return; }
+        emitExpr(e->args[0].get(), inst);   // "lib/x.so" 地址（sema 已拼接前缀）→ R4
+        popReg(4, 8);
+        pushConst(4, 2);                    // RTLD_NOW → R5
+        popReg(5, 4);
+        ins(OP_SCOPE_PUSH, "", "dload");
+        pushReg(4, 8);                      // base+0: 路径（8B）
+        pushReg(5, 4);                      // base+8: 标志（4B）
+        ins(OP_NEW_STACK, "8", "dlopen ret");
+        em_.pushD(8);
+        ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 12"); // argBytes = 8+4
+        loadSlot(0, 8, 12);
+        ins(OP_STACK_PTR_MOVE, "20");
+        em_.popD(20);
+        ins(OP_SCOPE_POP);
+        pushReg(0, 8);
+        em_.pushD(8);
         return;
     }
     if (name == "memcpy") {
