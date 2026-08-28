@@ -779,7 +779,12 @@ void CodeGen::emitStmt(Stmt* s, FuncInstance* inst) {
             break;
         }
         case StmtKind::Return: {
-            if (s->expr) emitExpr(s->expr.get(), inst);
+            if (s->expr) {
+                emitExpr(s->expr.get(), inst);
+                // 按函数返回类型 coercion：否则字面量（如 return 0 的 u32）宽度与
+                // emitReturn 的弹出宽度不符，栈不平衡会把返回地址弹错、打断调用方
+                coerceOnStack(s->expr->type, inst->retType, inst);
+            }
             emitReturn(inst);
             break;
         }
