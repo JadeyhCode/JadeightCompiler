@@ -159,3 +159,6 @@ runtime/      j8run 宿主运行器（复用 Jadeight2 VM 全量实现）
 tests/        回归测试（.j8 + .expected + run_tests.sh）
 tools/        辅助工具（汇编转储、追踪解释器等）
 ```
+
+
+完整语法文档：`docs/SYNTAX.md`（词法 + 形式文法 + 全部构造）。

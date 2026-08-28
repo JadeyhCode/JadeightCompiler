@@ -1672,7 +1672,7 @@ Type* Sema::checkBuiltin(Expr* e, FuncInstance* inst, const std::string& name) {
             else if (rn == "u64") k = TypeKind::U64;
             else if (rn == "i64") k = TypeKind::I64;
             else if (rn == "f64") k = TypeKind::F64;
-            else if (rn == "ptr") k = TypeKind::U64;
+            else if (rn == "ptr") { e->type = Type::makePtr(Type::make(TypeKind::Void)); return e->type; } // 可赋给 ptr 变量
             else if (rn == "void") k = TypeKind::Void;
         }
         e->type = Type::make(k);
