@@ -1222,7 +1222,7 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         // 参数先在调用者作用域求值到 R4..，再 SCOPE_PUSH 压栈（idx→base+0，值参数→base+8..）
         std::string retName;
         std::vector<std::string> argNames;
-        if (e->args.size() < 3 || e->args[1]->kind != ExprKind::StrLit ||
+        if (e->args.size() < 2 || e->args[1]->kind != ExprKind::StrLit ||
             !dlParseSig(e->args[1]->strVal, retName, argNames)) {
             pushConst(8, 0);
             return;

@@ -1654,8 +1654,8 @@ Type* Sema::checkBuiltin(Expr* e, FuncInstance* inst, const std::string& name) {
         return e->type;
     }
     if (name == "dl_call") {
-        // dl_call(idx, sigLiteral, args...) → 返回类型由签名串字面量决定
-        if (e->args.size() < 3) { Diag::error(e->loc, "dl_call expects (idx, signature, args...)"); e->type = Type::make(TypeKind::U64); return e->type; }
+        // dl_call(idx, sigLiteral, args...) → 返回类型由签名串字面量决定（void/无参函数允许仅 (idx, sig)）
+        if (e->args.size() < 2) { Diag::error(e->loc, "dl_call expects (idx, signature[, args...])"); e->type = Type::make(TypeKind::U64); return e->type; }
         arg(0); arg(1); // idx 与签名串定型
         for (size_t ai = 2; ai < e->args.size(); ++ai) arg(ai); // 值参数定型
         Expr* sig = e->args[1].get();
