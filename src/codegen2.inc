@@ -1578,9 +1578,9 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         }
         return;
     }
-    // 组件相关
+    // 组件相关（run 除外：tmpl 是系统名而非组件名，必须先放行到 run 分支）
     auto compIt = sema_->compLayout.find(tmpl);
-    if (compIt == sema_->compLayout.end()) { pushConst(8, 0); return; }
+    if (name != "run" && compIt == sema_->compLayout.end()) { pushConst(8, 0); return; }
     const Sema::CompLayout& cl = compIt->second;
     if (name == "has" || name == "remove") {
         emitExpr(e->args[0].get(), inst);
@@ -1699,7 +1699,9 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         ins(OP_CMP_LT_U32);
         branchOnFlag(lBody, lEnd);
         label(lBody);
-        // 检查组件存在
+        // 检查组件存在（lSkip 必须在循环外定义并 label：branchOnFlag 用 operator[] 查表，
+        // 未记录的 label 会解析成 0 → 跳回函数开头）
+        std::string lSkip = newLabel("run_skip");
         for (const std::string& cn : sys->componentNames) {
             auto clIt = sema_->compLayout.find(cn);
             int bitsetOff = clIt != sema_->compLayout.end() ? clIt->second.bitsetOff : 0;
@@ -1712,7 +1714,6 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
             loadPtr(1, 1, t0);
             pushReg(1, 1);
             std::string lHas = newLabel("run_has");
-            std::string lSkip = newLabel("run_skip");
             branchOnFlag(lHas, lSkip);
             label(lHas);
         }
@@ -1735,7 +1736,6 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         ins(OP_SCOPE_POP);
         std::string lSkip2 = newLabel("run_skip2");
         jumpTo(lSkip2);
-        std::string lSkip = newLabel("run_skip");
         label(lSkip);
         label(lSkip2);
         // e++
