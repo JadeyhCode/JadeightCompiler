@@ -165,5 +165,6 @@ tools/        辅助工具（汇编转储、追踪解释器等）
 
 - 语言完整手册（词法/类型/语句/函数/协议/泛型/ECS/内建/已知坑）：
   [JadeightPoject/docs/07-语言参考.md](../JadeightPoject/docs/07-语言参考.md)
+- j8c 使用指南（构建/用法/示例/测试/版本历史）：
+  [JadeightPoject/docs/12-j8c使用指南.md](../JadeightPoject/docs/12-j8c使用指南.md)
 - 全部生态文档汇总与阅读路径：**[JadeightPoject/docs/00-文档索引.md](../JadeightPoject/docs/00-文档索引.md)**
-- 本仓库使用指南：[docs/GUIDE.md](docs/GUIDE.md)
