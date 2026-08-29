@@ -161,4 +161,9 @@ tools/        辅助工具（汇编转储、追踪解释器等）
 ```
 
 
-完整语法文档：`docs/SYNTAX.md`（词法 + 形式文法 + 全部构造）。
+## 文档
+
+- 语言完整手册（词法/类型/语句/函数/协议/泛型/ECS/内建/已知坑）：
+  [JadeightPoject/docs/07-语言参考.md](../JadeightPoject/docs/07-语言参考.md)
+- 全部生态文档汇总与阅读路径：**[JadeightPoject/docs/00-文档索引.md](../JadeightPoject/docs/00-文档索引.md)**
+- 本仓库使用指南：[docs/GUIDE.md](docs/GUIDE.md)
