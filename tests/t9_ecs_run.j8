@@ -1,0 +1,108 @@
+// t9_ecs_run.j8 — run<System>() 边界测试：
+//   空 world / 混合组件过滤 / run 中 spawn（count 快照）/ 嵌套 run /
+//   run 中 despawn（末尾回收 + 非末尾只清 bitset）/ remove 后不再处理 / 批量遍历
+component Pos { i32 x; }
+component Vel { i32 vx; }
+component Health { i32 hp; }
+component Tag { i32 id; }
+
+system Move : Pos, Vel {
+    fn update(ent e) {
+        get<Pos>(e)->x = get<Pos>(e)->x + get<Vel>(e)->vx;
+    }
+}
+
+system Spawner : Pos {
+    fn update(ent e) {
+        ent n = spawn();              // run 中生成新实体
+        add<Pos>(n, 100);
+        add<Tag>(n, 999);
+    }
+}
+
+system Heal : Health {
+    fn update(ent e) {
+        get<Health>(e)->hp = get<Health>(e)->hp + 1;
+    }
+}
+
+system Nested : Pos {
+    fn update(ent e) {
+        run<Heal>();                  // 嵌套 run（每处理一个实体都真正执行一次）
+    }
+}
+
+system Killer : Health {
+    fn update(ent e) {
+        despawn(e);                   // run 中销毁自己
+    }
+}
+
+void main() {
+    // 1) 空 world 跑 run：不崩、count 不变
+    run<Move>();
+    print(entity_count());            // 0
+
+    // 2) 混合实体：a 有全部组件、b 缺 Vel、c 无组件
+    ent a = spawn();
+    add<Pos>(a, 1);
+    add<Vel>(a, 3);
+    ent b = spawn();
+    add<Pos>(b, 10);
+    ent c = spawn();
+    run<Move>();                      // 只处理 a
+    print(get<Pos>(a)->x);            // 4（1+3）
+    print(get<Pos>(b)->x);            // 10（缺 Vel，不被处理）
+    print(entity_count());            // 3
+
+    // 3) run 中 spawn：count 是循环开始时的快照，新实体本轮不被处理
+    run<Spawner>();                   // a、b 各 spawn 1 个 → 实体 3、4
+    print(entity_count());            // 5
+    ent n0 = 3;
+    print(get<Tag>(n0)->id);          // 999
+    print(has<Pos>(n0));              // true
+
+    // 4) 嵌套 run（此时无 Health 实体，内层 Heal 无处理）
+    run<Nested>();
+    print(entity_count());            // 5
+
+    // 5) 给 a 加 Health 后再嵌套：4 个带 Pos 的实体（a、b、n0、n1）的 update
+    //    各触发一次内层 Heal → 10+1×4
+    add<Health>(a, 10);
+    run<Nested>();                    // update(a)→Heal→11；update(b)→Heal→12；
+    print(get<Health>(a)->hp);        // update(n0)→13；update(n1)→14
+
+    // 6) run 中 despawn 自己：a 非末尾（只清 bitset），d 是末尾（count 回收）
+    ent d = spawn();
+    add<Health>(d, 7);
+    print(entity_count());            // 6
+    run<Killer>();                    // 处理 a（清组件）与 d（回收）
+    print(entity_count());            // 5（d 被回收）
+    print(alive(d));                  // false
+    print(alive(a));                  // true（a 只是组件被清）
+    print(has<Health>(a));            // false
+    print(has<Pos>(a));               // false
+
+    // 7) remove 组件后该实体不再被系统处理
+    ent e2 = spawn();
+    add<Pos>(e2, 100);
+    add<Vel>(e2, 1);
+    run<Move>();                      // 只有 e2 满足 Pos+Vel
+    print(get<Pos>(e2)->x);           // 101
+    remove<Vel>(e2);
+    run<Move>();
+    print(get<Pos>(e2)->x);           // 101（不再 +1）
+
+    // 8) 批量：25 个实体全部满足组件，验证遍历覆盖
+    for (u32 i = 0; i < 25; i = i + 1) {
+        ent e = spawn();
+        add<Pos>(e, i);
+        add<Vel>(e, 1);
+    }
+    run<Move>();
+    ent s0 = 6;                       // i=0 → 0+1
+    ent s2 = 8;                       // i=2 → 2+1
+    print(get<Pos>(s0)->x);           // 1
+    print(get<Pos>(s2)->x);           // 3
+    print(entity_count());            // 31
+}
