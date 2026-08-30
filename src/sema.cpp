@@ -594,6 +594,11 @@ void Sema::buildTables() {
     if (!functions.count("memcpy")) addAutoExtern("memcpy", "void", {"ptr", "ptr", "u64"});
     if (!functions.count("dlopen")) addAutoExtern("dlopen", "ptr", {"ptr", "i32"});
     if (!functions.count("dlsym")) addAutoExtern("dlsym", "ptr", {"ptr", "ptr"});
+    // 宿主 extern（j8run 内置，非 libc）：多线程 SPMD 支持 —— tid() 当前线程号、
+    // shared_buf() 共享内存基址。j8run 在 manifest 注册前占位 externFn[0]/[1]，
+    // 清单里的这两行 dlsym 找不到 → 跳过，恰好保留宿主占位。
+    if (!functions.count("tid")) addAutoExtern("tid", "u32", {});
+    if (!functions.count("shared_buf")) addAutoExtern("shared_buf", "ptr", {});
 
     // helper 函数（buildHelpers 已把声明加入 decls，统一注册）
     for (auto& d : prog_->decls) {
@@ -1725,6 +1730,11 @@ Type* Sema::checkBuiltin(Expr* e, FuncInstance* inst, const std::string& name) {
         if (name.find("atomic_add") == 0 || name.find("atomic_xchg") == 0) {
             arg(0); arg(1);
             e->type = Type::make(is64 ? TypeKind::U64 : TypeKind::U32);
+            return e->type;
+        }
+        if (name.find("atomic_cas") == 0) {
+            arg(0); arg(1); arg(2);
+            e->type = Type::make(TypeKind::Bool);
             return e->type;
         }
     }

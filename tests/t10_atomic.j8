@@ -1,0 +1,63 @@
+// t10_atomic.j8 — 多线程原子指令测试（SPMD，--threads 4）
+// 4 个线程跑同一份字节码，共享 shared_buf() 内存，用 atomic_*_u32/u64 内建同步。
+// 覆盖：atomic_load/store（屏障）、atomic_add（竞争自增）、
+//       atomic_cas（CAS 自旋自增）、atomic_xchg（自旋锁）。
+// 汇总由线程 0 打印；两个屏障（初始化 + 完成计数）保证确定性结果。
+extern u32 tid();
+extern ptr shared_buf();
+
+void main() {
+    ptr buf = shared_buf();
+    ptr counter = buf;          // +0:  atomic_add 计数器
+    ptr cas_cnt = buf + 8;      // +8:  CAS 自旋计数器
+    ptr ready   = buf + 16;     // +16: 就绪屏障
+    ptr x       = buf + 24;     // +24: 锁保护的累加值
+    ptr lock    = buf + 32;     // +32: xchg 自旋锁
+    ptr done    = buf + 40;     // +40: 完成计数（竞争结束屏障）
+
+    // 初始化屏障：线程 0 发布，其余自旋等待（seq_cst 保证可见性）
+    if (tid() == 0) {
+        atomic_store_u64(counter, 0);
+        atomic_store_u64(cas_cnt, 0);
+        atomic_store_u64(x, 7);
+        atomic_store_u64(lock, 0);
+        atomic_store_u64(done, 0);
+        atomic_store_u64(ready, 1);
+    } else {
+        while (atomic_load_u64(ready) == 0) { }
+    }
+
+    // 竞争 1：每线程 100 次原子自增 → 4 线程 = 400（非原子会丢更新）
+    for (u32 i = 0; i < 100; i = i + 1) {
+        atomic_add_u64(counter, 1);
+    }
+
+    // 竞争 2：CAS 自旋自增 100 次 → 400（读-改-写必须 CAS 重试）
+    u32 doneN = 0;
+    while (doneN < 100) {
+        u64 cur = atomic_load_u64(cas_cnt);
+        if (atomic_cas_u64(cas_cnt, cur, cur + 1)) {
+            doneN = doneN + 1;
+        }
+    }
+
+    // 竞争 3：xchg 自旋锁保护 x 自增 50 次 → 7 + 4×50 = 207（锁坏则丢更新）
+    u32 n = 0;
+    while (n < 50) {
+        while (atomic_xchg_u64(lock, 1) == 1) { }   // 拿锁（旧值 0 → 持有）
+        u64 v = atomic_load_u64(x);
+        atomic_store_u64(x, v + 1);
+        atomic_store_u64(lock, 0);                  // 解锁
+        n = n + 1;
+    }
+
+    // 完成屏障：全部线程跑完竞争后线程 0 才打印
+    atomic_add_u64(done, 1);
+    if (tid() == 0) {
+        while (atomic_load_u64(done) != 4) { }
+        print(atomic_load_u64(counter));   // 400
+        print(atomic_load_u64(cas_cnt));   // 400
+        print(atomic_load_u64(x));         // 207
+        print(atomic_load_u64(lock));      // 0（已解锁）
+    }
+}

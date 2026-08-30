@@ -88,17 +88,35 @@ static vector<ExternSig> parseManifest(const string& path) {
     return sigs;
 }
 
+// ---------------- 多线程支持（--threads N） ----------------
+// SPMD 模型：N 个线程跑同一份字节码，共享 Manager 与进程堆。
+// 字节码用 tid() 区分线程、shared_buf() 拿共享内存、atomic_*_u32/u64 内建做同步。
+static thread_local int g_threadId = 0;
+static alignas(8) uint64_t g_sharedBuf[16];   // 128 字节共享缓冲区（所有线程同一地址）
+
+static uint32_t thunk_tid()        { return static_cast<uint32_t>(g_threadId); }
+static uint64_t thunk_shared_buf() { return reinterpret_cast<uint64_t>(g_sharedBuf); }
+
+// 宿主 extern 查找：manifest 里出现 tid/shared_buf 时直接返回宿主函数（dlsym 找不到）
+static void* hostExtern(const string& name) {
+    if (name == "tid") return reinterpret_cast<void*>(&thunk_tid);
+    if (name == "shared_buf") return reinterpret_cast<void*>(&thunk_shared_buf);
+    return nullptr;
+}
+
 static void registerExterns(const vector<ExternSig>& sigs, const vector<string>& libs) {
     for (size_t idx = 0; idx < sigs.size() && idx < 256; ++idx) {
         const ExternSig& s = sigs[idx];
-        void* fn = nullptr;
-        for (const string& lib : libs) {
-            if (lib.empty()) { fn = dlsym(RTLD_DEFAULT, s.name.c_str()); }
-            else {
-                void* h = dlopen(lib.c_str(), RTLD_NOW | RTLD_GLOBAL);
-                if (h) { g_handles.push_back(h); fn = dlsym(h, s.name.c_str()); }
+        void* fn = hostExtern(s.name);   // 宿主内建（tid/shared_buf）优先
+        if (!fn) {
+            for (const string& lib : libs) {
+                if (lib.empty()) { fn = dlsym(RTLD_DEFAULT, s.name.c_str()); }
+                else {
+                    void* h = dlopen(lib.c_str(), RTLD_NOW | RTLD_GLOBAL);
+                    if (h) { g_handles.push_back(h); fn = dlsym(h, s.name.c_str()); }
+                }
+                if (fn) break;
             }
-            if (fn) break;
         }
         if (!fn) {
             cerr << "j8run: extern[" << idx << "] '" << s.name << "' not found\n";
@@ -127,21 +145,48 @@ static void registerExterns(const vector<ExternSig>& sigs, const vector<string>&
     }
 }
 
+
+// 无 manifest 时也占位注册 tid/shared_buf（单线程跑 SPMD 字节码不崩）
+static void registerHostExterns() {
+    static ffi_cif cifTid, cifBuf;
+    ffi_prep_cif(&cifTid, FFI_DEFAULT_ABI, 0, &ffi_type_uint32, nullptr);
+    ffi_prep_cif(&cifBuf, FFI_DEFAULT_ABI, 0, &ffi_type_uint64, nullptr);
+    for (int i = 0; i < 256; ++i) {
+        if (externFn[i].fn == nullptr) {
+            externFn[i] = { &cifTid, reinterpret_cast<void*>(&thunk_tid) };
+            break;
+        }
+    }
+    for (int i = 0; i < 256; ++i) {
+        if (externFn[i].fn == nullptr) {
+            externFn[i] = { &cifBuf, reinterpret_cast<void*>(&thunk_shared_buf) };
+            break;
+        }
+    }
+}
+
 // ---------------- 主入口 ----------------
 int main(int argc, char* argv[]) {
     string bcPath, manifestPath;
     vector<string> libs = { "", "libc.so.6" };
+    int threads = 0;   // 0 = 单线程（callFunctionSave）
 
     for (int i = 1; i < argc; ++i) {
         string a = argv[i];
         if (a == "--externs" && i + 1 < argc) manifestPath = argv[++i];
         else if (a == "--lib" && i + 1 < argc) libs.push_back(argv[++i]);
+        else if (a == "--threads" && i + 1 < argc) {
+            threads = std::atoi(argv[++i]);
+            if (threads < 1) threads = 1;
+        }
         else bcPath = a;
     }
     if (bcPath.empty()) {
-        cerr << "Usage: j8run <main.bc> [--externs manifest] [--lib lib.so]\n";
+        cerr << "Usage: j8run <main.bc> [--externs manifest] [--lib lib.so] [--threads N]\n";
         return 2;
     }
+
+    registerHostExterns();
 
     if (!manifestPath.empty()) {
         registerExterns(parseManifest(manifestPath), libs);
@@ -155,11 +200,40 @@ int main(int argc, char* argv[]) {
 
     cout << "===== j8run: " << bcPath << " =====" << endl;
     prog.state.manager = make_shared<Manager>();   // GET_ADDRS 需要管理器
-    callFunctionSave(&prog, nullptr, nullptr);
 
-    if (prog.state.end == 2) {
-        cerr << "j8run: program exited abnormally (end=" << (int)prog.state.end << ")\n";
-        return 1;
+    if (threads > 1) {
+        // SPMD：N 线程跑同一字节码，共享 manager；每线程设置 tid 供 tid() extern 读取。
+        // 与 callFunctionSave 一致：count=entry、重置栈/作用域后 F8BFLRead。
+        executoringHarness harness(prog.state.manager);
+        harness.states.resize(threads);
+        harness.engines.resize(threads);
+        for (int i = 0; i < threads; ++i) {
+            harness.states[i].manager = prog.state.manager;
+            harness.states[i].count = prog.entry;
+            harness.states[i].end = 0;
+            harness.states[i].stackPtr = 0;
+            harness.states[i].zuoYongYv = 1;
+            harness.states[i].silent = 1;   // 与 callFunctionSave 一致：END 不打印退出信息
+            harness.engines[i].ptr = &harness.states[i];
+            harness.threads.emplace_back([&harness, &prog, i]() {
+                g_threadId = i;
+                harness.engines[i].F8BFLRead(prog.bytecode);
+            });
+        }
+        harness.join();
+        // 汇总退出状态：任一线程 end==2 视为异常
+        bool abnormal = false;
+        for (auto& st : harness.states) if (st.end == 2) abnormal = true;
+        if (abnormal) {
+            cerr << "j8run: program exited abnormally (end=2)\n";
+            return 1;
+        }
+    } else {
+        callFunctionSave(&prog, nullptr, nullptr);
+        if (prog.state.end == 2) {
+            cerr << "j8run: program exited abnormally (end=" << (int)prog.state.end << ")\n";
+            return 1;
+        }
     }
     return 0;
 }

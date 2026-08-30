@@ -39,7 +39,12 @@ for src in tests/*.j8; do
             fail=$((fail + 1)); failed+=("$base -O$opt(编译)")
             continue
         fi
-        if ! timeout 60 "$J8RUN" "$TMP/$base.bc" 2>"$TMP/err" | tail -n +2 > "$TMP/out"; then
+        # 约定：存在 tests/$base.threads 时，其内容作为 j8run 的 --threads 参数（多线程测试）
+        run_args=()
+        if [ -f "tests/$base.threads" ]; then
+            run_args+=(--threads "$(head -1 "tests/$base.threads")")
+        fi
+        if ! timeout 120 "$J8RUN" "$TMP/$base.bc" "${run_args[@]}" 2>"$TMP/err" | tail -n +2 > "$TMP/out"; then
             echo "FAIL $base -O$opt：运行失败"
             head -3 "$TMP/err"
             fail=$((fail + 1)); failed+=("$base -O$opt(运行)")

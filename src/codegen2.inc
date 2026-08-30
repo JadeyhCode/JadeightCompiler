@@ -1309,24 +1309,52 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         bool is64 = name.find("u64") != std::string::npos;
         VmNum n = is64 ? VmNum::U64 : VmNum::U32;
         int w = is64 ? 8 : 4;
+        Type* wt = is64 ? Type::make(TypeKind::U64) : Type::make(TypeKind::U32);
         emitExpr(e->args[0].get(), inst);
         popReg(1, 8);
         storeSlot(1, 8, tempOffset(inst, 0));
+        // 值参数必须 coerce 到目标宽度：字面量压 4 字节（u32），u64 指令 popReg(0,8)
+        // 会多弹 4 字节导致栈错位（历史 bug：42 被写成 42<<32）
         if (name.find("atomic_load") == 0) {
             ins(is64 ? OP_ATOMIC_LOAD_U64 : OP_ATOMIC_LOAD_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
             pushReg(0, w);
         } else if (name.find("atomic_store") == 0) {
             emitExpr(e->args[1].get(), inst);
+            coerceOnStack(e->args[1]->type, wt, inst);
             popReg(0, w);
             ins(is64 ? OP_ATOMIC_STORE_U64 : OP_ATOMIC_STORE_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
-        } else if (name.find("atomic_add") == 0 || name.find("atomic_xchg") == 0) {
+        } else if (name.find("atomic_xchg") == 0) {
             emitExpr(e->args[1].get(), inst);
+            coerceOnStack(e->args[1]->type, wt, inst);
+            popReg(0, w);
+            ins(is64 ? OP_ATOMIC_XCHG_U64 : OP_ATOMIC_XCHG_U32,
+                "R0, 1, " + std::to_string(tempOffset(inst, 0)));
+            pushReg(0, w);
+        } else if (name.find("atomic_add") == 0) {
+            emitExpr(e->args[1].get(), inst);
+            coerceOnStack(e->args[1]->type, wt, inst);
             popReg(0, w);
             ins(is64 ? OP_ATOMIC_ADD_U64 : OP_ATOMIC_ADD_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
             pushReg(0, w);
+        } else if (name.find("atomic_cas") == 0) {
+            // CAS(ptr, expected, desired)：desired → R3；expected 最后压栈
+            // （VM 的 CAS 从栈顶弹 expected。注意 desired 不能放 R0：
+            //  后续 expected 的 coerceOnStack 用 R0 中转会覆盖它）
+            emitExpr(e->args[2].get(), inst);
+            coerceOnStack(e->args[2]->type, wt, inst);
+            popReg(3, w);
+            emitExpr(e->args[1].get(), inst);
+            coerceOnStack(e->args[1]->type, wt, inst);
+            // 栈顶 = expected（w 字节）；指令弹 expected、压 U8 标志
+            ins(is64 ? OP_ATOMIC_CAS_U64 : OP_ATOMIC_CAS_U32,
+                "R3, 1, " + std::to_string(tempOffset(inst, 0)));
+            em_.popD(w);
+            em_.pushD(1);
+            popReg(0, 1);      // 标志 → R0
+            pushReg(0, 1);     // 结果 bool
         }
         return;
     }
