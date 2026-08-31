@@ -170,6 +170,7 @@ int main(int argc, char* argv[]) {
     string bcPath, manifestPath;
     vector<string> libs = { "", "libc.so.6" };
     int threads = 0;   // 0 = 单线程（callFunctionSave）
+    bool useJit = false;   // --jit：快速模板 JIT（fastjit.inc，无 LLVM 依赖）
 
     for (int i = 1; i < argc; ++i) {
         string a = argv[i];
@@ -179,10 +180,11 @@ int main(int argc, char* argv[]) {
             threads = std::atoi(argv[++i]);
             if (threads < 1) threads = 1;
         }
+        else if (a == "--jit") useJit = true;
         else bcPath = a;
     }
     if (bcPath.empty()) {
-        cerr << "Usage: j8run <main.bc> [--externs manifest] [--lib lib.so] [--threads N]\n";
+        cerr << "Usage: j8run <main.bc> [--externs manifest] [--lib lib.so] [--threads N] [--jit]\n";
         return 2;
     }
 
@@ -200,6 +202,31 @@ int main(int argc, char* argv[]) {
 
     cout << "===== j8run: " << bcPath << " =====" << endl;
     prog.state.manager = make_shared<Manager>();   // GET_ADDRS 需要管理器
+
+    // ---- 快速 JIT 路径（--jit）：整个程序编译为原生代码执行 ----
+    if (useJit) {
+        fastjit::Fn fn = fastjit::submit(prog.bytecode.byteCode.get(), prog.bytecode.size, prog.entry,
+                                         reinterpret_cast<uint64_t>(prog.bytecode.byteCode.get()),
+                                         reinterpret_cast<uint64_t>(&prog.bytecode.size));
+        if (!fn) {
+            cerr << "j8run: --jit 编译失败（指令集不支持？），退回解释器\n";
+            useJit = false;
+        } else if (threads > 1) {
+            // SPMD：每线程直接跑原生入口（函数自带帧，线程安全）
+            std::vector<std::thread> th;
+            for (int i = 0; i < threads; ++i) {
+                th.emplace_back([&prog, fn, i]() {
+                    g_threadId = i;
+                    fn(nullptr, nullptr, prog.state.manager.get());
+                });
+            }
+            for (auto& t : th) t.join();
+            return 0;
+        } else {
+            fn(nullptr, nullptr, prog.state.manager.get());
+            return 0;
+        }
+    }
 
     if (threads > 1) {
         // SPMD：N 线程跑同一字节码，共享 manager；每线程设置 tid 供 tid() extern 读取。

@@ -7,40 +7,40 @@
 // 2. 类型指令全部展开（编译期硬编码宽度）：
 //    - 每个 (运算,类型) 组合是独立 opcode，如 ADD_U32 / ADD_F64 / SQRT_F64
 //    - 运行期不读任何类型字节，处理函数直接按 sizeof(T) 读写，最快路径
-//    - CHAR8/16/32 与 U8/U16/U32 位模式一致（v3 起只有 COUT 保留 char，按字符输出）
+//    - CHAR8/16/32 与 U8/U16/U32 位模式一致（v2.03 起只有 COUT 保留 char，按字符输出）
 // 3. ptr 只能寻址：只有 ADD_PTR / SUB_PTR（指针加减偏移），
 //    禁止 ptr 的乘除/开方/log；LEA 负责取地址
 // 4. 两种寻址方式：mode0 直接读栈内[基址+off]；mode1 从栈顶弹指针再读写
 // 5. 分配器不关心类型：NEW_ARRAY(size:u64,slotOff:u32) 按 uint8_t[] 分配，
 //    指针写到指定栈槽——只在乎 How size? Where?
-// 6. REG 寄存器指令族（v3 新增）：16 个 64 位寄存器 R0..R15，
+// 6. REG 寄存器指令族（v2.03 新增）：16 个 64 位寄存器 R0..R15，
 //    子指令族：MOVI（立即数→寄存器）、MOV（寄存器间拷贝）、
 //            PUSH/POP（寄存器↔栈）、LOAD/STORE（内存↔寄存器，mode 与 LEA 一致）
-// 7. 系统地址与间接跳转（v3 新增）：GET_ADDRS 一条指令压入关键地址
+// 7. 系统地址与间接跳转（v2.03 新增）：GET_ADDRS 一条指令压入关键地址
 //    （bytecode 缓冲区 / size 字段 / DataSave 对象 / 管理器）；JMP_IND 弹栈绝对地址跳转
-// 8. 多线程（v3 新增）：executoringHarness 每个线程一份 DataSave/executoring，
+// 8. 多线程（v2.03 新增）：executoringHarness 每个线程一份 DataSave/executoring，
 //    共享同一个 Manager（共有指针）；原子指令 ATOMIC_*（共 10 条，不超过 10 条）
 //    实现跨线程同步。REG 指令族 opcode 最小 + 处理器代码最靠前，利于缓存命中。
-// 9. 外部调用（v3 新增）：EXTERN_CALL 指令 —— libffi 原样暴露（薄透传，零封装）。
+// 9. 外部调用（v2.03 新增）：EXTERN_CALL 指令 —— libffi 原样暴露（薄透传，零封装）。
 //    宿主用 ffi_prep_cif 预生成 ffi_cif（存全局/栈）连同函数指针登记进 externFn 表，
 //    客人程序即可调用任意 C 函数（含 libffi 自身：ffi_prep_cif/ffi_call/ffi_raw_*…）。
-// 10. VM 函数（v3 新增）：FunctionSave —— save 类对象（save 一行未改），可动态加载
+// 10. VM 函数（v2.03 新增）：FunctionSave —— save 类对象（save 一行未改），可动态加载
 //    （从文件/内存装载函数字节码）；FUNC_CALL 指令调用它。正常执行路径零开销：
 //    只多一条 opcode 和一次函数调用时的状态重置，热循环不碰任何新字段。
-// 11. MEMCPY 指令（v3 新增）：一条指令完成任意两块内存间的 bulk 拷贝
+// 11. MEMCPY 指令（v2.03 新增）：一条指令完成任意两块内存间的 bulk 拷贝
 //    （mode0 栈槽 / mode1 指针解引用，与 REG_LOAD/STORE 一致）。
-// 12. 枚举动态链接库的函数（v3 新增）：collect_externs —— 遍历 dl_iterate_phdr
+// 12. 枚举动态链接库的函数（v2.03 新增）：collect_externs —— 遍历 dl_iterate_phdr
 //    所有已加载对象，只挑"刚刚 dlopen 过"的库（按加载基址匹配），解析 .dynsym
 //    把所有函数符号的 {名字指针, 地址} 逐条写入客人缓冲区，返回条数。
-// 13. LLVM JIT（v4 新增）：JadeightJIT::submit(save*) → 返回 LLVM JIT 编译后的
+// 13. LLVM JIT（v2.12 新增）：JadeightJIT::submit(save*) → 返回 LLVM JIT 编译后的
 //    原生函数指针（O2 优化 + MCJIT；同 save 地址缓存复用，编译一次）。
 //    调用约定与 FUNC_CALL 一致：fn(argPtr, retPtr, manager)（R15/R14 语义）；
 //    全指令集逐条翻译成 LLVM IR，EXTERN_CALL/FUNC_CALL/原子/COUT 走
 //    addGlobalMapping 绑定的运行期辅助，行为与解释器逐字节一致。
-// 14. 字节码只读冻结（v4 新增）：save 的写能力仅限构造阶段（文件/内存加载时），
+// 14. 字节码只读冻结（v2.12 新增）：save 的写能力仅限构造阶段（文件/内存加载时），
 //    构造完成后 mprotect 冻结为只读 —— 解释器只能读字节码，运行时任何写入
 //    （含客人程序经 GET_ADDRS 拿到的字节码指针）都会触发段错误而非悄悄改坏。
-// 15. JIT_SUBMIT 指令（v4 新增）：参数为 save* 所在栈槽 fnPtrOff 与返回槽 retOff，
+// 15. JIT_SUBMIT 指令（v2.12 新增）：参数为 save* 所在栈槽 fnPtrOff 与返回槽 retOff，
 //    运行时把该 save 交给 JadeightJIT::submit 即时编译（同地址缓存复用），
 //    返回的函数指针写回 retOff（8 字节）——客人程序可自行把任意 save 变成原生函数。
 //==================== 指令表（opcode） =====================
@@ -105,7 +105,7 @@
 //            基址、retOff 为返回值地址调用它。调用约定：函数被调用时 R15=参数基址
 //            指针、R14=返回值地址指针（函数字节码以 STACK_INIT 开头、END 收尾，
 //            END 的"正常退出"打印由 silent 标志抑制）。
-//  LLVM JIT（v4 新增）：save 即时编译成原生函数指针
+//  LLVM JIT（v2.12 新增）：save 即时编译成原生函数指针
 //   173      JIT_SUBMIT(fnPtrOff:u32, retOff:u32) —— 从栈槽 fnPtrOff 读 save*，
 //            JadeightJIT::submit 编译（同地址缓存复用，编译一次），返回的函数指针
 //            （调用约定 fn(argPtr,retPtr,manager)）写回栈槽 retOff（8 字节）。
@@ -116,7 +116,7 @@
 //            mode1 = 先解引用栈槽里的指针再操作（可拷堆/管理器等任意内存）。
 // 安全策略：bytecode 末尾追加 3 个 OP_ERR_END 哨兵字节，指令计数越界读到哨兵
 //   即跳 ErrorEnd 安全退出；解释器内【不做任何越界检查】，追求极致速度。
-//   字节码只读冻结（v4 新增）：save 构造完成后 mprotect 置只读，写能力仅限构造阶段，
+//   字节码只读冻结（v2.12 新增）：save 构造完成后 mprotect 置只读，写能力仅限构造阶段，
 //   解释器/JIT/客人程序（GET_ADDRS 拿到的字节码指针）只能读，运行时写入触发段错误。
 //==================== 类型哲学 =====================
 // 类型只在编译期（汇编器）确定：宽度与解释全部硬编码进 opcode，
@@ -238,7 +238,7 @@ enum : uint8_t {
     OP_EXTERN_CALL, // EXTERN_CALL(idx:u8, argBaseOff:u32, retOff:u32) —— 调 externFn 表里的 C 函数
     // VM 函数调用（FunctionSave：save 类对象，可动态加载）
     OP_FUNC_CALL,   // FUNC_CALL(fnPtrOff:u32, argBaseOff:u32, retOff:u32) —— 调栈槽里的 FunctionSave*
-    // LLVM JIT（v4 新增）：把 save 即时编译成原生函数指针
+    // LLVM JIT（v2.12 新增）：把 save 即时编译成原生函数指针
     OP_JIT_SUBMIT,  // JIT_SUBMIT(fnPtrOff:u32, retOff:u32) —— 从栈槽 fnPtrOff 读 save*，
                     // JadeightJIT::submit 编译（同地址缓存复用），函数指针写栈槽 retOff（8字节）
     // 内存 bulk 拷贝
@@ -302,7 +302,7 @@ template <class T, std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
 [[gnu::always_inline]] static inline void coutVal(uint32_t v) { std::cout << v << '\n'; }
 
 //==================== 字节码容器 =====================
-// 只读冻结设计（v4 新增）：字节码的写能力仅限于构造阶段 —— 构造时从输入
+// 只读冻结设计（v2.12 新增）：字节码的写能力仅限于构造阶段 —— 构造时从输入
 // （文件/内存加载）拷入字节码并追加 3 个哨兵，构造完成后立即 mprotect 冻结为
 // 只读。此后解释器、JIT 以及客人程序（经 GET_ADDRS 拿到的字节码指针）都只能读；
 // 任何运行时写入都会触发 SIGSEGV，而不是悄悄改坏字节码。
@@ -1350,7 +1350,7 @@ static void callFunctionSave(FunctionSave* fn, uint8_t* argPtr, uint8_t* retPtr)
 }
 
 #ifdef JADEIGHT_HAS_LLVM
-//==================== LLVM JIT（v4 新增）：save 指针 → 原生函数指针 =====================
+//==================== LLVM JIT（v2.12 新增）：save 指针 → 原生函数指针 =====================
 // 提交一个 save（字节码）→ 返回 LLVM JIT 编译后的原生函数指针（同 save 地址缓存复用）。
 // 调用约定与解释器 FUNC_CALL 完全一致：
 //     void fn(uint8_t* argPtr, uint8_t* retPtr, void* manager)
@@ -2926,7 +2926,7 @@ int main() {
     save prog(bc.data(), bc.size());
     ex.F8BFLRead(prog);
 
-    // ===== LLVM JIT（v4 新增）：提交 save 指针 → 返回 JIT 编译后的函数指针 =====
+    // ===== LLVM JIT（v2.12 新增）：提交 save 指针 → 返回 JIT 编译后的函数指针 =====
     // 1) JIT 编译 VM 函数 fnSum 的字节码（save 指针 = &fnSum.bytecode）：
     //    调用约定与 FUNC_CALL 一致 —— fn(argPtr, retPtr, manager)。
     JadeightJIT::Fn jitSum = JadeightJIT::submit(fnSum.bytecode);
@@ -2952,7 +2952,7 @@ int main() {
         jitMain(nullptr, nullptr, ds.manager.get());
     }
 
-    // ===== 字节码只读冻结验证（v4 新增）：写能力仅限构造阶段 =====
+    // ===== 字节码只读冻结验证（v2.12 新增）：写能力仅限构造阶段 =====
     // save 构造完成后 mprotect 置只读。fork 一个子进程尝试写入冻结的字节码
     // （绕过 C++ 接口直写指针，等价于客人程序经 GET_ADDRS 拿到的字节码地址），
     // 子进程应死于 SIGSEGV —— 运行时写入被物理拦截，而非悄悄改坏字节码。
@@ -2969,7 +2969,7 @@ int main() {
                                                    : "未冻结（运行时写入成功！）") << '\n';
     }
 
-    // ===== JIT_SUBMIT 指令（v4 新增）：客人程序把 save 指针即时编译成函数指针 =====
+    // ===== JIT_SUBMIT 指令（v2.12 新增）：客人程序把 save 指针即时编译成函数指针 =====
     // 客人程序从 Manager.jitSave（偏移32）拿到宿主给的 save*（&fnSum.bytecode），
     // 存进栈槽后 JIT_SUBMIT(slot, retSlot) 编译，函数指针写回 retSlot，
     // 再经 mode1 存进 Manager.jitFn（偏移40）交还宿主对照。

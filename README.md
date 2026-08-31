@@ -13,7 +13,7 @@ cmake --build build --target j8c j8run
 
 产出：
 - `build/j8c`    —— 编译器：`.j8` → `.bc`（LE 头 + 字节码，FunctionSave 兼容）
-- `build/j8run`  —— 宿主运行器：在真正的 Jadeight VM 上执行 `.bc`
+- `build/j8run`  —— 宿主运行器：在真正的 Jadeight VM 上执行 `.bc`；`--jit` 用快速模板 JIT 编译后运行（无 LLVM 依赖）
 
 ## 用法
 
@@ -22,7 +22,7 @@ j8c input.j8 [-o out.bc] [-S] [-O0|-O1|-O2] [--no-unroll] [--unroll-limit N]
              [--no-inline] [--ecs-capacity N] [--stack N]
              [-emit-externs manifest.txt] [-v] [--dump-ast]
 
-j8run out.bc [--externs manifest.txt] [--lib lib.so]
+j8run out.bc [--externs manifest.txt] [--lib lib.so] [--threads N] [--jit]
 ```
 
 - `-S`：保留生成的 Jadeight 汇编文本（`out.jasm`）
