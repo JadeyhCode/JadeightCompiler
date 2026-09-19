@@ -1,14 +1,14 @@
 // j8run.cpp — Jadeight VM 宿主运行器
 //
-// 在真正的 Jadeight VM（Jadeight2/main.cpp 的解释器）上运行 j8c 编译出的 .bc 程序。
+// 在 Jadeight ISA v3 VM（Jadeight2ReWrite）上运行 j8c 编译出的 .bc 模块。
 // 复用方式：#define main jadeight2_vm_main 后 include 整个 VM 源文件，
-// 从而直接使用 save / FunctionSave / DataSave / executoring / callFunctionSave /
-// externFn 等完整实现（逐字节一致的运行语义，与用户自己的 VM 完全同源）。
+// 直接使用 save（模块 + 函数目录）/ Process / Thread / VM / Jit / externFn。
+// .bc 是 v3 模块格式（magic "J3BC"：函数目录 + 连续码流）。
 //
 // 用法:
 //   j8run <main.bc> [--externs manifest.txt] [--lib lib.so]
 //
-//   main.bc       编译器产出的程序（FunctionSave 文件格式：LE 头 + 字节码）
+//   main.bc       编译器产出的 v3 模块（magic "J3BC"：函数目录 + 码流）
 //   --externs f   外部函数清单（编译器 -emit-externs 生成），j8run 用 libffi 注册
 //   --lib path    额外的共享库（缺省尝试 libc.so.6 与 RTLD_DEFAULT）
 
@@ -26,7 +26,7 @@
 #include <vector>
 
 #define main jadeight2_vm_main
-#include "main.cpp"   // Jadeight2 VM 全量（LLVM 部分默认不启用）
+#include "../../Jadeight2ReWrite/Jadeight2.cpp"   // ISA v3 VM 全量（解释器 + 模板 JIT）
 #undef main
 
 using namespace std;
@@ -92,7 +92,7 @@ static vector<ExternSig> parseManifest(const string& path) {
 // SPMD 模型：N 个线程跑同一份字节码，共享 Manager 与进程堆。
 // 字节码用 tid() 区分线程、shared_buf() 拿共享内存、atomic_*_u32/u64 内建做同步。
 static thread_local int g_threadId = 0;
-static alignas(8) uint64_t g_sharedBuf[16];   // 128 字节共享缓冲区（所有线程同一地址）
+alignas(8) static uint64_t g_sharedBuf[16];   // 128 字节共享缓冲区（所有线程同一地址）
 
 static uint32_t thunk_tid()        { return static_cast<uint32_t>(g_threadId); }
 static uint64_t thunk_shared_buf() { return reinterpret_cast<uint64_t>(g_sharedBuf); }
@@ -169,8 +169,8 @@ static void registerHostExterns() {
 int main(int argc, char* argv[]) {
     string bcPath, manifestPath;
     vector<string> libs = { "", "libc.so.6" };
-    int threads = 0;   // 0 = 单线程（callFunctionSave）
-    bool useJit = false;   // --jit：快速模板 JIT（fastjit.inc，无 LLVM 依赖）
+    int threads = 0;     // 0/1 = 单线程
+    bool useJit = false; // --jit：ISA v3 模板 JIT
 
     for (int i = 1; i < argc; ++i) {
         string a = argv[i];
@@ -189,78 +189,52 @@ int main(int argc, char* argv[]) {
     }
 
     registerHostExterns();
+    if (!manifestPath.empty()) registerExterns(parseManifest(manifestPath), libs);
 
-    if (!manifestPath.empty()) {
-        registerExterns(parseManifest(manifestPath), libs);
-    }
-
-    FunctionSave prog = FunctionSave::loadFromFile(bcPath.c_str());
-    if (prog.bytecode.size == 0) {
-        cerr << "j8run: cannot load " << bcPath << "\n";
+    VM vm;
+    if (!vm.module.loadFromFile(bcPath.c_str())) {
+        cerr << "j8run: cannot load v3 module: " << bcPath << "\n";
         return 1;
     }
 
+    // 首行 banner 走 stdout：tests/run_tests.sh 用 `tail -n +2` 丢掉它
     cout << "===== j8run: " << bcPath << " =====" << endl;
-    prog.state.manager = make_shared<Manager>();   // GET_ADDRS 需要管理器
+    if (getenv("J8RUN_VERBOSE")) {
+        cerr << "j8run: " << vm.module.funcCount() << " 个函数，"
+             << (useJit ? "模板 JIT" : "解释器") << (threads > 1 ? "，SPMD" : "") << "\n";
+    }
 
-    // ---- 快速 JIT 路径（--jit）：整个程序编译为原生代码执行 ----
+    // 入口函数下标来自模块头（j8c 的 main 不一定是 0 号函数）
+    const uint16_t entryFn = static_cast<uint16_t>(vm.module.entryFunc);
+
+    // --jit：建立 JIT 并编译入口函数；某函数编译失败会自动回退解释器
     if (useJit) {
-        fastjit::Fn fn = fastjit::submit(prog.bytecode.byteCode.get(), prog.bytecode.size, prog.entry,
-                                         reinterpret_cast<uint64_t>(prog.bytecode.byteCode.get()),
-                                         reinterpret_cast<uint64_t>(&prog.bytecode.size));
-        if (!fn) {
-            cerr << "j8run: --jit 编译失败（指令集不支持？），退回解释器\n";
-            useJit = false;
-        } else if (threads > 1) {
-            // SPMD：每线程直接跑原生入口（函数自带帧，线程安全）
-            std::vector<std::thread> th;
-            for (int i = 0; i < threads; ++i) {
-                th.emplace_back([&prog, fn, i]() {
-                    g_threadId = i;
-                    fn(nullptr, nullptr, prog.state.manager.get());
-                });
-            }
-            for (auto& t : th) t.join();
-            return 0;
-        } else {
-            fn(nullptr, nullptr, prog.state.manager.get());
-            return 0;
-        }
+        void* fn = vm.jitCompile(entryFn);
+        if (getenv("J8RUN_VERBOSE"))
+            cerr << "j8run: JIT " << (fn ? "已编译入口函数" : "入口函数不支持，回退解释器") << "\n";
     }
 
-    if (threads > 1) {
-        // SPMD：N 线程跑同一字节码，共享 manager；每线程设置 tid 供 tid() extern 读取。
-        // 与 callFunctionSave 一致：count=entry、重置栈/作用域后 F8BFLRead。
-        executoringHarness harness(prog.state.manager);
-        harness.states.resize(threads);
-        harness.engines.resize(threads);
-        for (int i = 0; i < threads; ++i) {
-            harness.states[i].manager = prog.state.manager;
-            harness.states[i].count = prog.entry;
-            harness.states[i].end = 0;
-            harness.states[i].stackPtr = 0;
-            harness.states[i].zuoYongYv = 1;
-            harness.states[i].silent = 1;   // 与 callFunctionSave 一致：END 不打印退出信息
-            harness.engines[i].ptr = &harness.states[i];
-            harness.threads.emplace_back([&harness, &prog, i]() {
-                g_threadId = i;
-                harness.engines[i].F8BFLRead(prog.bytecode);
-            });
-        }
-        harness.join();
-        // 汇总退出状态：任一线程 end==2 视为异常
-        bool abnormal = false;
-        for (auto& st : harness.states) if (st.end == 2) abnormal = true;
-        if (abnormal) {
-            cerr << "j8run: program exited abnormally (end=2)\n";
-            return 1;
-        }
+    Process* pr = vm.newProcess();
+    const int N = (threads > 1) ? threads : 1;
+    vector<Thread*> ts;
+    ts.reserve(static_cast<size_t>(N));
+    for (int i = 0; i < N; ++i) ts.push_back(vm.createThread(pr, entryFn, nullptr, 0));
+
+    if (N == 1) {
+        g_threadId = 0;
+        vm.launch(ts[0], entryFn);
     } else {
-        callFunctionSave(&prog, nullptr, nullptr);
-        if (prog.state.end == 2) {
-            cerr << "j8run: program exited abnormally (end=" << (int)prog.state.end << ")\n";
+        vector<std::thread> th;
+        th.reserve(static_cast<size_t>(N));
+        for (int i = 0; i < N; ++i)
+            th.emplace_back([&vm, &ts, entryFn, i] { g_threadId = i; vm.launch(ts[i], entryFn); });
+        for (auto& x : th) x.join();
+    }
+
+    for (Thread* t : ts)
+        if (t->state.load() == 2) {
+            cerr << "j8run: program exited abnormally (trap)\n";
             return 1;
         }
-    }
     return 0;
 }

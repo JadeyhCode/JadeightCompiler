@@ -123,17 +123,20 @@ int main(int argc, char* argv[]) {
         output = (dot != std::string::npos) ? input.substr(0, dot) + ".bc" : input + ".bc";
     }
 
-    // 写 .bc（LE 头 + 字节码，FunctionSave::loadFromFile 兼容）
+    // 写 .bc —— ISA v3 模块格式（magic "J3BC"：函数目录 + 连续码流）
     {
+        jadeight::ModuleImage img;
+        img.entryFunc = cg.entryFuncIndex;
+        img.funcs = cg.moduleFuncs;
+        img.code = bc;
+        const std::vector<uint8_t> bytes = img.serialize();
         std::ofstream out(output, std::ios::binary);
         if (!out) { std::cerr << "j8c: 无法写入 " << output << "\n"; return 1; }
-        uint8_t hdr[12];
-        jadeight::wrLE<uint32_t>(hdr, argSize);
-        jadeight::wrLE<uint32_t>(hdr + 4, retSize);
-        jadeight::wrLE<uint32_t>(hdr + 8, entry);
-        out.write(reinterpret_cast<const char*>(hdr), 12);
-        out.write(reinterpret_cast<const char*>(bc.data()), static_cast<std::streamsize>(bc.size()));
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         out.close();
+        if (verbose)
+            std::cerr << "j8c: v3 模块 " << img.funcs.size() << " 个函数，入口 #" << img.entryFunc
+                      << "，码流 " << bc.size() << " 字节\n";
     }
 
     // -S：保留汇编

@@ -1,8 +1,11 @@
 # JadeightCompiler (j8c) — Jadeight 的 C 风格编译器
 
 为 [JadeightAbstractionCode](../JadeightAbstractionCode)（Jadeight 汇编器/字节码层）封装的
-**C 风格、面向协议 + ECS 的高级语言编译器**，输出 Jadeight VM（`Jadeight2`）可直接运行的
-`.bc` 字节码。支持循环展开、常量折叠/传播、DCE 等优化。
+**C 风格、面向协议 + ECS 的高级语言编译器**，输出 **ISA v3** 的 `.bc` 模块
+（magic `"J3BC"`：函数目录 + 码流），由 [Jadeight2ReWrite](../Jadeight2ReWrite) 的虚拟机
+（解释器或 `--jit`）通过宿主运行器 `j8run` 执行。支持循环展开、常量折叠/传播、DCE 等优化。
+
+> ISA 的唯一事实源是 [`../Jadeight2ReWrite/isa.hpp`](../Jadeight2ReWrite/isa.hpp)（68 条合并式 opcode）。
 
 ## 构建
 
@@ -12,8 +15,9 @@ cmake --build build --target j8c j8run
 ```
 
 产出：
-- `build/j8c`    —— 编译器：`.j8` → `.bc`（LE 头 + 字节码，FunctionSave 兼容）
-- `build/j8run`  —— 宿主运行器：在真正的 Jadeight VM 上执行 `.bc`；`--jit` 用快速模板 JIT 编译后运行（无 LLVM 依赖）
+- `build/j8c`    —— 编译器：`.j8` → `.bc`（v3 模块 `"J3BC"`；`-S` 可同时留下 `.jasm`）
+- `build/j8run`  —— 宿主运行器：在 ISA v3 VM 上执行 `.bc`（复用 `../Jadeight2ReWrite/Jadeight2.cpp`）；
+  `--jit` 走 copy-and-patch 模板 JIT，另有 `--threads N`（SPMD 多线程）
 
 ## 用法
 
@@ -148,14 +152,14 @@ extern i32 puts(u8*);
 
 （历史遗留：`__print_u64` 的「多余 0」现象根因已查明并修复——实为 `-O0` 下
 `UnaryOp::Neg` 代码生成复用 R0 寄存器导致的 `i32 neg = -7` 计算出 0，并非
-`__print_u64` 或 VM 边界问题；`tests/run_tests.sh` 已移除对应豁免，20/20 全绿。）
+`__print_u64` 或 VM 边界问题；`tests/run_tests.sh` 已移除对应豁免，当前 18/18 全绿。）
 - 泛型函数当前仅支持单泛型参数。
 
 ## 项目结构
 
 ```
 src/          编译器源码（词法 → 语法 → 语义 → 优化 → 代码生成）
-runtime/      j8run 宿主运行器（复用 Jadeight2 VM 全量实现）
+runtime/      j8run 宿主运行器（复用 Jadeight2ReWrite 的 ISA v3 VM 全量实现）
 tests/        回归测试（.j8 + .expected + run_tests.sh）
 tools/        辅助工具（汇编转储、追踪解释器等）
 ```

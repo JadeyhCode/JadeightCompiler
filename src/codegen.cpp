@@ -2,6 +2,8 @@
 #include "codegen.h"
 
 #include <cstring>
+#include <fstream>
+#include <functional>
 #include <set>
 #include <sstream>
 
@@ -9,17 +11,7 @@ namespace j8 {
 
 using namespace jadeight;
 
-std::map<uint8_t, std::string> CodeGen::Emitter::opNames;
-
-std::string CodeGen::Emitter::nameOf(uint8_t op) {
-    if (opNames.empty()) {
-        std::map<std::string, uint8_t> m;
-        buildOpNameMapFull(m);
-        for (auto& [n, o] : m) opNames[o] = n;
-    }
-    auto it = opNames.find(op);
-    return it == opNames.end() ? "OP_" + std::to_string(op) : it->second;
-}
+std::string CodeGen::Emitter::nameOf(uint8_t op) { return std::string(jadeight::opName(op)); }
 
 // ==================== opcode 选择 ====================
 // VmNum 定义于 common.h
@@ -48,120 +40,29 @@ static int vmW(VmNum n) {
 }
 
 // 有符号整型复用同宽无符号 opcode（VM 的按位/移位/寄存器指令没有符号变体）
-#define OPSW(NAME, U8_, U16_, U32_, U64_) \
-    [](VmNum n)->uint8_t { switch(n){case VmNum::U8:case VmNum::I8:return OP_##NAME##_U8;case VmNum::U16:case VmNum::I16:return OP_##NAME##_U16;case VmNum::U32:case VmNum::I32:return OP_##NAME##_U32;case VmNum::U64:case VmNum::I64:return OP_##NAME##_U64;default:return OP_##NAME##_U64;} }
-// 加法/减法：VM 只有无符号宽度变体，有符号整型复用同宽无符号 opcode
-static const auto kAdd = [](VmNum n) -> uint8_t {
+// ISA v3 把「宽度 + 符号 + 浮点 + 指针」合并成一个参数字节（TypeDesc），
+// 所以 v2 里 kAdd/kMul/opCmpLT/... 这些"按类型选 opcode"的表全部塌缩成 tdOf()。
+// 旧的 helper 名字保留为别名，调用点只多传一个 opcode：insT(OP_ADD, kAdd(n))。
+static uint8_t tdOf(VmNum n) {
     switch (n) {
-        case VmNum::U8: case VmNum::I8: return OP_ADD_U8;
-        case VmNum::U16: case VmNum::I16: return OP_ADD_U16;
-        case VmNum::U32: case VmNum::I32: return OP_ADD_U32;
-        case VmNum::U64: case VmNum::I64: return OP_ADD_U64;
-        case VmNum::F64: return OP_ADD_F64;
-        default: return OP_ADD_U64;
-    }
-};
-static const auto kSub = [](VmNum n) -> uint8_t {
-    switch (n) {
-        case VmNum::U8: case VmNum::I8: return OP_SUB_U8;
-        case VmNum::U16: case VmNum::I16: return OP_SUB_U16;
-        case VmNum::U32: case VmNum::I32: return OP_SUB_U32;
-        case VmNum::U64: case VmNum::I64: return OP_SUB_U64;
-        case VmNum::F64: return OP_SUB_F64;
-        default: return OP_SUB_U64;
-    }
-};
-static const auto kShl  = OPSW(SHL, SHL_U8, SHL_U16, SHL_U32, SHL_U64);
-static const auto kShr  = OPSW(SHR, SHR_U8, SHR_U16, SHR_U32, SHR_U64);
-static uint8_t opShri(VmNum n) {
-    switch (n) {
-        case VmNum::I8: return OP_SHR_I8;
-        case VmNum::I16: return OP_SHR_I16;
-        case VmNum::I32: return OP_SHR_I32;
-        case VmNum::I64: return OP_SHR_I64;
-        default: return OP_SHR_I32;
+        case VmNum::U8: return TD_U8;
+        case VmNum::I8: return TD_I8;
+        case VmNum::U16: return TD_U16;
+        case VmNum::I16: return TD_I16;
+        case VmNum::U32: return TD_U32;
+        case VmNum::I32: return TD_I32;
+        case VmNum::U64: return TD_U64;
+        case VmNum::I64: return TD_I64;
+        case VmNum::F64: return TD_F64;
+        case VmNum::Ptr: return TD_PTR;
+        default: return TD_U64;
     }
 }
-static const auto kShri = opShri;
-static const auto kAnd  = OPSW(AND, AND_U8, AND_U16, AND_U32, AND_U64);
-static const auto kOr   = OPSW(OR, OR_U8, OR_U16, OR_U32, OR_U64);
-static const auto kNot  = OPSW(NOT, NOT_U8, NOT_U16, NOT_U32, NOT_U64);
-static const auto kRegMovi = OPSW(REG_MOVI, REG_MOVI_U8, REG_MOVI_U16, REG_MOVI_U32, REG_MOVI_U64);
-static const auto kRegPush = OPSW(REG_PUSH, REG_PUSH_U8, REG_PUSH_U16, REG_PUSH_U32, REG_PUSH_U64);
-static const auto kRegPop  = OPSW(REG_POP, REG_POP_U8, REG_POP_U16, REG_POP_U32, REG_POP_U64);
-static const auto kRegLoad = OPSW(REG_LOAD, REG_LOAD_U8, REG_LOAD_U16, REG_LOAD_U32, REG_LOAD_U64);
-static const auto kRegStore= OPSW(REG_STORE, REG_STORE_U8, REG_STORE_U16, REG_STORE_U32, REG_STORE_U64);
-
-static uint8_t opMul(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_MUL_U8; case VmNum::I8: return OP_MUL_I8;
-        case VmNum::U16: return OP_MUL_U16; case VmNum::I16: return OP_MUL_I16;
-        case VmNum::U32: return OP_MUL_U32; case VmNum::I32: return OP_MUL_I32;
-        case VmNum::U64: return OP_MUL_U64; case VmNum::I64: return OP_MUL_I64;
-        case VmNum::F64: return OP_MUL_F64;
-        default: return OP_MUL_U64;
-    }
-}
-static uint8_t opDiv(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_DIV_U8; case VmNum::I8: return OP_DIV_I8;
-        case VmNum::U16: return OP_DIV_U16; case VmNum::I16: return OP_DIV_I16;
-        case VmNum::U32: return OP_DIV_U32; case VmNum::I32: return OP_DIV_I32;
-        case VmNum::U64: return OP_DIV_U64; case VmNum::I64: return OP_DIV_I64;
-        case VmNum::F64: return OP_DIV_F64;
-        default: return OP_DIV_U64;
-    }
-}
-static uint8_t opCmpLT(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_CMP_LT_U8; case VmNum::I8: return OP_CMP_LT_I8;
-        case VmNum::U16: return OP_CMP_LT_U16; case VmNum::I16: return OP_CMP_LT_I16;
-        case VmNum::U32: return OP_CMP_LT_U32; case VmNum::I32: return OP_CMP_LT_I32;
-        case VmNum::U64: return OP_CMP_LT_U64; case VmNum::I64: return OP_CMP_LT_I64;
-        case VmNum::F64: return OP_CMP_LT_F64; case VmNum::Ptr: return OP_CMP_LT_PTR;
-        default: return OP_CMP_LT_U64;
-    }
-}
-static uint8_t opCmpEQ(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_CMP_EQ_U8; case VmNum::I8: return OP_CMP_EQ_I8;
-        case VmNum::U16: return OP_CMP_EQ_U16; case VmNum::I16: return OP_CMP_EQ_I16;
-        case VmNum::U32: return OP_CMP_EQ_U32; case VmNum::I32: return OP_CMP_EQ_I32;
-        case VmNum::U64: return OP_CMP_EQ_U64; case VmNum::I64: return OP_CMP_EQ_I64;
-        case VmNum::F64: return OP_CMP_EQ_F64; case VmNum::Ptr: return OP_CMP_EQ_PTR;
-        default: return OP_CMP_EQ_U64;
-    }
-}
-static uint8_t opCmpGT(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_CMP_GT_U8; case VmNum::I8: return OP_CMP_GT_I8;
-        case VmNum::U16: return OP_CMP_GT_U16; case VmNum::I16: return OP_CMP_GT_I16;
-        case VmNum::U32: return OP_CMP_GT_U32; case VmNum::I32: return OP_CMP_GT_I32;
-        case VmNum::U64: return OP_CMP_GT_U64; case VmNum::I64: return OP_CMP_GT_I64;
-        case VmNum::F64: return OP_CMP_GT_F64; case VmNum::Ptr: return OP_CMP_GT_PTR;
-        default: return OP_CMP_GT_U64;
-    }
-}
-static uint8_t opSqrt(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_SQRT_U8; case VmNum::I8: return OP_SQRT_I8;
-        case VmNum::U16: return OP_SQRT_U16; case VmNum::I16: return OP_SQRT_I16;
-        case VmNum::U32: return OP_SQRT_U32; case VmNum::I32: return OP_SQRT_I32;
-        case VmNum::U64: return OP_SQRT_U64; case VmNum::I64: return OP_SQRT_I64;
-        case VmNum::F64: return OP_SQRT_F64;
-        default: return OP_SQRT_F64;
-    }
-}
-static uint8_t opLog(VmNum n) {
-    switch (n) {
-        case VmNum::U8: return OP_LOG_U8; case VmNum::I8: return OP_LOG_I8;
-        case VmNum::U16: return OP_LOG_U16; case VmNum::I16: return OP_LOG_I16;
-        case VmNum::U32: return OP_LOG_U32; case VmNum::I32: return OP_LOG_I32;
-        case VmNum::U64: return OP_LOG_U64; case VmNum::I64: return OP_LOG_I64;
-        case VmNum::F64: return OP_LOG_F64;
-        default: return OP_LOG_F64;
-    }
-}
+static const auto kAdd = tdOf, kSub = tdOf, kShl = tdOf, kShr = tdOf, kShri = tdOf;
+static const auto kAnd = tdOf, kOr = tdOf, kNot = tdOf;
+static const auto kRegMovi = tdOf, kRegPush = tdOf, kRegPop = tdOf, kRegLoad = tdOf, kRegStore = tdOf;
+static const auto opMul = tdOf, opDiv = tdOf, opSqrt = tdOf, opLog = tdOf;
+static const auto opCmpLT = tdOf, opCmpEQ = tdOf, opCmpGT = tdOf;
 
 // ==================== 内部工具 ====================
 std::string CodeGen::newLabel(const std::string& prefix) {
@@ -178,10 +79,10 @@ FuncInstance* CodeGen::helper(const std::string& name) {
 
 void CodeGen::pushConst(int width, uint64_t value, const std::string& comment) {
     switch (width) {
-        case 1: ins(kRegMovi(VmNum::U8), "R0, " + std::to_string(value), comment); ins(kRegPush(VmNum::U8), "R0"); break;
-        case 2: ins(kRegMovi(VmNum::U16), "R0, " + std::to_string(value)); ins(kRegPush(VmNum::U16), "R0"); break;
-        case 4: ins(kRegMovi(VmNum::U32), "R0, " + std::to_string(value)); ins(kRegPush(VmNum::U32), "R0"); break;
-        case 8: ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(value)); ins(kRegPush(VmNum::U64), "R0"); break;
+        case 1: insT(OP_MOVI, kRegMovi(VmNum::U8), "R0, " + std::to_string(value), comment); insT(OP_PUSH_REG, kRegPush(VmNum::U8), "R0"); break;
+        case 2: insT(OP_MOVI, kRegMovi(VmNum::U16), "R0, " + std::to_string(value)); insT(OP_PUSH_REG, kRegPush(VmNum::U16), "R0"); break;
+        case 4: insT(OP_MOVI, kRegMovi(VmNum::U32), "R0, " + std::to_string(value)); insT(OP_PUSH_REG, kRegPush(VmNum::U32), "R0"); break;
+        case 8: insT(OP_MOVI, kRegMovi(VmNum::U64), "R0, " + std::to_string(value)); insT(OP_PUSH_REG, kRegPush(VmNum::U64), "R0"); break;
         default: break;
     }
     em_.pushD(width);
@@ -189,10 +90,10 @@ void CodeGen::pushConst(int width, uint64_t value, const std::string& comment) {
 
 void CodeGen::pushReg(int reg, int width) {
     switch (width) {
-        case 1: ins(kRegPush(VmNum::U8), "R" + std::to_string(reg)); break;
-        case 2: ins(kRegPush(VmNum::U16), "R" + std::to_string(reg)); break;
-        case 4: ins(kRegPush(VmNum::U32), "R" + std::to_string(reg)); break;
-        case 8: ins(kRegPush(VmNum::U64), "R" + std::to_string(reg)); break;
+        case 1: insT(OP_PUSH_REG, kRegPush(VmNum::U8), "R" + std::to_string(reg)); break;
+        case 2: insT(OP_PUSH_REG, kRegPush(VmNum::U16), "R" + std::to_string(reg)); break;
+        case 4: insT(OP_PUSH_REG, kRegPush(VmNum::U32), "R" + std::to_string(reg)); break;
+        case 8: insT(OP_PUSH_REG, kRegPush(VmNum::U64), "R" + std::to_string(reg)); break;
         default: break;
     }
     em_.pushD(width);
@@ -200,10 +101,10 @@ void CodeGen::pushReg(int reg, int width) {
 
 void CodeGen::popReg(int reg, int width) {
     switch (width) {
-        case 1: ins(kRegPop(VmNum::U8), "R" + std::to_string(reg)); break;
-        case 2: ins(kRegPop(VmNum::U16), "R" + std::to_string(reg)); break;
-        case 4: ins(kRegPop(VmNum::U32), "R" + std::to_string(reg)); break;
-        case 8: ins(kRegPop(VmNum::U64), "R" + std::to_string(reg)); break;
+        case 1: insT(OP_POP_REG, kRegPop(VmNum::U8), "R" + std::to_string(reg)); break;
+        case 2: insT(OP_POP_REG, kRegPop(VmNum::U16), "R" + std::to_string(reg)); break;
+        case 4: insT(OP_POP_REG, kRegPop(VmNum::U32), "R" + std::to_string(reg)); break;
+        case 8: insT(OP_POP_REG, kRegPop(VmNum::U64), "R" + std::to_string(reg)); break;
         default: break;
     }
     em_.popD(width);
@@ -211,73 +112,55 @@ void CodeGen::popReg(int reg, int width) {
 
 void CodeGen::loadSlot(int reg, int width, int off) {
     switch (width) {
-        case 1: ins(kRegLoad(VmNum::U8), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
-        case 2: ins(kRegLoad(VmNum::U16), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
-        case 4: ins(kRegLoad(VmNum::U32), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
-        case 8: ins(kRegLoad(VmNum::U64), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 1: insT(OP_LOAD, kRegLoad(VmNum::U8), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 2: insT(OP_LOAD, kRegLoad(VmNum::U16), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 4: insT(OP_LOAD, kRegLoad(VmNum::U32), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 8: insT(OP_LOAD, kRegLoad(VmNum::U64), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
         default: break;
     }
 }
 
 void CodeGen::storeSlot(int reg, int width, int off) {
     switch (width) {
-        case 1: ins(kRegStore(VmNum::U8), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
-        case 2: ins(kRegStore(VmNum::U16), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
-        case 4: ins(kRegStore(VmNum::U32), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
-        case 8: ins(kRegStore(VmNum::U64), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 1: insT(OP_STORE, kRegStore(VmNum::U8), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 2: insT(OP_STORE, kRegStore(VmNum::U16), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 4: insT(OP_STORE, kRegStore(VmNum::U32), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
+        case 8: insT(OP_STORE, kRegStore(VmNum::U64), "R" + std::to_string(reg) + ", 0, " + std::to_string(off)); break;
         default: break;
     }
 }
 
 void CodeGen::loadPtr(int reg, int width, int slot) {
     switch (width) {
-        case 1: ins(kRegLoad(VmNum::U8), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
-        case 2: ins(kRegLoad(VmNum::U16), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
-        case 4: ins(kRegLoad(VmNum::U32), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
-        case 8: ins(kRegLoad(VmNum::U64), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 1: insT(OP_LOAD, kRegLoad(VmNum::U8), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 2: insT(OP_LOAD, kRegLoad(VmNum::U16), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 4: insT(OP_LOAD, kRegLoad(VmNum::U32), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 8: insT(OP_LOAD, kRegLoad(VmNum::U64), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
         default: break;
     }
 }
 
 void CodeGen::storePtr(int reg, int width, int slot) {
     switch (width) {
-        case 1: ins(kRegStore(VmNum::U8), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
-        case 2: ins(kRegStore(VmNum::U16), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
-        case 4: ins(kRegStore(VmNum::U32), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
-        case 8: ins(kRegStore(VmNum::U64), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 1: insT(OP_STORE, kRegStore(VmNum::U8), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 2: insT(OP_STORE, kRegStore(VmNum::U16), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 4: insT(OP_STORE, kRegStore(VmNum::U32), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
+        case 8: insT(OP_STORE, kRegStore(VmNum::U64), "R" + std::to_string(reg) + ", 1, " + std::to_string(slot)); break;
         default: break;
     }
 }
 
 // 分支：flag(u8 在栈顶) != 0 → lTrue；== 0 → lFalse
 void CodeGen::branchOnFlag(const std::string& lTrue, const std::string& lFalse) {
-    int base = em_.counting ? 0 : codeOff_[curFuncIdx_];
-    int t = em_.counting ? 0 : base + labelPos_[curFuncIdx_][lTrue];
-    int f = em_.counting ? 0 : base + labelPos_[curFuncIdx_][lFalse];
-    if (!em_.counting && getenv("J8_DEBUG_BRANCH")) {
-        fprintf(stderr, "  branch inst=%d %s->%d %s->%d\n", curFuncIdx_, lTrue.c_str(), t, lFalse.c_str(), f);
-    }
-    if (!em_.counting && getenv("J8_DEBUG_BRANCH")) {
-        fprintf(stderr, "[branch inst=%d] %s=%d %s=%d (map size %zu)\n", curFuncIdx_,
-                lTrue.c_str(), t, lFalse.c_str(), f, labelPos_[curFuncIdx_].size());
-    }
-    popReg(0, 1);                       // flag → R0（零扩展）
-    pushReg(0, 8);                      // flag 上栈（u64）
-    ins(kRegMovi(VmNum::U64), "R1, " + std::to_string(static_cast<uint64_t>(t - f)));
-    pushReg(1, 8);                      // diff
-    ins(OP_MUL_U64);
-    ins(kRegMovi(VmNum::U64), "R1, " + std::to_string(static_cast<uint64_t>(f)));
-    pushReg(1, 8);
-    ins(OP_ADD_U64);
-    pushReg(kBcBase, 8);
-    ins(OP_ADD_U64);
-    ins(OP_JMP_IND);
+    // v3 的 BRANCH 自己弹 u8 条件：非 0 → lTrue，否则落空走 JMP lFalse。
+    ins(OP_BRANCH, lTrue, "cond != 0");
+    em_.popD(1);
+    jumpTo(lFalse);
 }
 
 void CodeGen::jumpTo(const std::string& target) {
-    int base = em_.counting ? 0 : codeOff_[curFuncIdx_];
-    int t = em_.counting ? 0 : base + labelPos_[curFuncIdx_][target];
-    ins(OP_JMP, std::to_string(t));
+    // v3 只有标签跳转：标签由汇编器按「函数相对偏移」解析，编译期不再算绝对地址
+    ins(OP_JMP, target);
 }
 
 // ==================== 生成流程 ====================
@@ -423,7 +306,15 @@ void CodeGen::emitDataSection(std::string& asmText) {
     for (const auto& s : strings_) {
         if (emitted.count(s)) continue; // 重复字面量只发射一次
         emitted.insert(s);
-        em_.comment("string \"" + s + "\"");
+        // 注释里不能出现换行（汇编器按行解析），把不可打印字符转义
+        std::string disp;
+        for (char c : s) {
+            if (c == '\n') disp += "\\n";
+            else if (c == '\t') disp += "\\t";
+            else if (c == '\r') disp += "\\r";
+            else disp += c;
+        }
+        em_.comment("string \"" + disp + "\"");
         for (unsigned char c : s) em_.dataByte(c);
         em_.dataByte(0);
     }
@@ -488,10 +379,15 @@ bool CodeGen::generate(std::string& asmText, std::vector<uint8_t>& outBytes,
     labelPosEmit_.clear();
     for (size_t i = 0; i < sema_->instances.size(); ++i) labelPosEmit_.emplace_back();
     asmText.clear();
-    asmText += ".ARGS 0\n.RETS 0\n.ENTRY " + std::to_string(codeOff_[mainIndex_]) + "\n";
+    // ISA v3：每个函数用 .FUNC 划出来（汇编器据此产出函数目录），
+    // .ENTRY 用绝对偏移，汇编器会换算成入口函数下标。
+    asmText += ".ENTRY " + std::to_string(codeOff_[mainIndex_]) + "\n";
     for (size_t i = 0; i < sema_->instances.size(); ++i) {
+        FuncInstance* fi2 = sema_->instances[i];
+        asmText += ".FUNC " + fi2->key + " " + std::to_string(fi2->paramBytes) + " " +
+                   std::to_string(fi2->retBytes) + "\n";
         em_.reset(false, &asmText, &labelPosEmit_[i]);
-        emitFunction(sema_->instances[i], static_cast<int>(i), false);
+        emitFunction(fi2, static_cast<int>(i), false);
         if (getenv("J8_DEBUG_LABELS")) {
             fprintf(stderr, "  inst=%zu emit-labels=%zu\n", i, labelPosEmit_[i].size());
             for (auto& [n2, p2] : labelPos_[i]) fprintf(stderr, "    %s=%d\n", n2.c_str(), p2);
@@ -507,14 +403,22 @@ bool CodeGen::generate(std::string& asmText, std::vector<uint8_t>& outBytes,
             if (mism) fprintf(stderr, "  inst=%zu: %d mismatches\n", i, mism);
         }
     }
+    // 数据段单独划一个"函数"，免得落进最后一个代码函数里（永不调用）
+    asmText += ".FUNC __data 0 0\n";
     emitDataSection(asmText);
 
-    // 汇编（纯字节码，无头部）
+    // 汇编（纯字节码，无头部；函数目录从 asmblr.funcs 取）
     Assembler asmblr;
     asmblr.pureBinary = true;
     uint32_t as_, rs, en;
     if (!asmblr.assemble(asmText, outBytes, as_, rs, en)) {
-        Diag::error({0, 0}, "internal assembler failed");
+        if (getenv("J8_DUMP_ASM")) {
+            std::istringstream dbg(asmText);
+            std::string ln;
+            int k = 0;
+            while (std::getline(dbg, ln) && k < 4000) { std::fprintf(stderr, "%5d| %s\n", ++k, ln.c_str()); }
+        }
+        Diag::error({0, 0}, "internal assembler failed: " + asmblr.error);
         return false;
     }
     // 校验尺寸与预测一致（偏移正确性的强保证）
@@ -525,9 +429,21 @@ bool CodeGen::generate(std::string& asmText, std::vector<uint8_t>& outBytes,
         return false;
     }
 
+    moduleFuncs = asmblr.funcs;
+    // 数据段必须落在编译期算出的 dataStart_ 上（字符串/见证表地址全靠它）
+    if (moduleFuncs.size() >= 2 && static_cast<int>(moduleFuncs.back().offset) != dataStart_) {
+        Diag::error({0, 0}, "internal: data section offset " +
+                            std::to_string(moduleFuncs.back().offset) + " != predicted " +
+                            std::to_string(dataStart_));
+        return false;
+    }
+    // 入口函数下标：entry 落在哪个函数的区间里
+    entryFuncIndex = 0;
+    for (size_t i = 0; i < moduleFuncs.size(); ++i)
+        if (en >= moduleFuncs[i].offset && en < moduleFuncs[i].offset + moduleFuncs[i].size) { entryFuncIndex = static_cast<uint32_t>(i); break; }
     argSize = 0;
     retSize = 0;
-    entry = static_cast<uint32_t>(codeOff_[mainIndex_]);
+    entry = en;
     return true;
 }
 
@@ -537,13 +453,13 @@ void CodeGen::emitPrologue(FuncInstance* inst) {
         ins(OP_STACK_INIT, std::to_string(stackSize_) + " " + std::to_string(scopeSize_),
             "main: stack/scope init");
         ins(OP_GET_ADDRS);
-        ins(kRegPop(VmNum::U64), "R11", "mgr");
-        ins(kRegPop(VmNum::U64), "R10", "ds");
-        ins(kRegPop(VmNum::U64), "R9", "sizeAddr");
-        ins(kRegPop(VmNum::U64), "R12", "bcBase -> R12");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R11", "mgr");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R10", "ds");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R9", "sizeAddr");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R12", "bcBase -> R12");
         em_.comment("初始化 ECS world");
         ins(OP_NEW_ARRAY, std::to_string(sema_->worldBytes) + " 0", "world heap");
-        ins(kRegLoad(VmNum::U64), "R13, 0, 0", "worldPtr -> R13");
+        insT(OP_LOAD, kRegLoad(VmNum::U64), "R13, 0, 0", "worldPtr -> R13");
         // VM 的 NEW_ARRAY 不保证清零：把整个 world 堆零初始化
         // （count/cap/bitset 必须为 0；数据区一并清零无害）
         if (sema_->worldBytes > 0) {
@@ -551,32 +467,35 @@ void CodeGen::emitPrologue(FuncInstance* inst) {
             std::string wzBody = newLabel("wz_body");
             std::string wzEnd = newLabel("wz_end");
             // i 存 R2（branch/压栈会覆盖 R0/R1 与低地址栈槽）
-            ins(kRegMovi(VmNum::U32), "R2, 0", "zero loop i = 0");
+            insT(OP_MOVI, kRegMovi(VmNum::U32), "R2, 0", "zero loop i = 0");
             label(wzTop);
             // i < worldBytes ?
             pushReg(2, 4);
             pushConst(4, static_cast<uint64_t>(sema_->worldBytes));
-            ins(OP_CMP_LT_U32);
+            insCmp(CMP_LT, TD_U32);
             branchOnFlag(wzBody, wzEnd);
             label(wzBody);
             // *(u8*)(world + i) = 0
             pushReg(13, 8);
             pushReg(2, 8);
-            ins(OP_ADD_PTR);
+            insT(OP_ADD, TD_PTR);
             popReg(1, 8);
             storeSlot(1, 8, tempOffset(inst, 1));
-            ins(kRegMovi(VmNum::U8), "R3, 0");
+            insT(OP_MOVI, kRegMovi(VmNum::U8), "R3, 0");
             storePtr(3, 1, tempOffset(inst, 1));
             // i++
             pushReg(2, 4);
             pushConst(4, 1);
-            ins(OP_ADD_U32);
+            insT(OP_ADD, TD_U32);
             popReg(2, 4);
             jumpTo(wzTop);
             label(wzEnd);
         }
     }
-    ins(OP_NEW_STACK, std::to_string(inst->localBytes), "frame locals");
+    // v3：CALL 把被调函数的帧基址设在「调用者 CALL 时的 sp」上，所以入口 sp = 帧基址 X。
+    // 一帧要盖住 [ret 区][参数][本地]，总长 = retBytes + paramBytes + localBytes。
+    ins(OP_STACK_ALLOC, std::to_string(inst->retBytes + inst->paramBytes + inst->localBytes),
+        "frame: ret+params+locals");
 }
 
 void CodeGen::emitReturn(FuncInstance* inst) {
@@ -600,10 +519,9 @@ void CodeGen::emitReturn(FuncInstance* inst) {
         }
     }
     if (!inst->isMain) {
-        ins(OP_STACK_PTR_MOVE, std::to_string(inst->localBytes), "pop frame");
-        ins(OP_JMP_IND, "", "return");
+        ins(OP_RET, "", "return（帧栈还原 sp/scope）");
     } else {
-        ins(OP_END, "", "program end");
+        ins(OP_HALT, "", "program end");
     }
 }
 
@@ -629,7 +547,7 @@ void CodeGen::emitStmt(Stmt* s, FuncInstance* inst) {
             if (t) {
                 int w = t->isStruct() ? 8 : (t->kind == TypeKind::Exist ? 16 : typeWidth(t));
                 if (w > 0) {
-                    ins(OP_STACK_PTR_MOVE, std::to_string(w), "drop expr value");
+                    ins(OP_STACK_MOVE, std::to_string(w), "drop expr value");
                     em_.popD(w);
                 }
             }
@@ -745,7 +663,7 @@ void CodeGen::emitStmt(Stmt* s, FuncInstance* inst) {
             } else if (s->init) {
                 emitExpr(s->init.get(), inst);
                 int w = typeWidth(s->init->type);
-                if (w > 0) { ins(OP_STACK_PTR_MOVE, std::to_string(w)); em_.popD(w); }
+                if (w > 0) { ins(OP_STACK_MOVE, std::to_string(w)); em_.popD(w); }
             }
             std::string lTop = newLabel("for");
             std::string lBody = newLabel("fbody");
@@ -763,7 +681,7 @@ void CodeGen::emitStmt(Stmt* s, FuncInstance* inst) {
             if (s->step) {
                 emitExpr(s->step.get(), inst);
                 int w = typeWidth(s->step->type);
-                if (w > 0) { ins(OP_STACK_PTR_MOVE, std::to_string(w)); em_.popD(w); }
+                if (w > 0) { ins(OP_STACK_MOVE, std::to_string(w)); em_.popD(w); }
             }
             jumpTo(lTop);
             label(lEnd);

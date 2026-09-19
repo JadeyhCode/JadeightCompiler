@@ -141,8 +141,8 @@ ConstVal evalConst(const Expr* e) {
                     else r = ConstVal::Int(a.i != b.i ? 1 : 0);
                     break;
                 }
-                case BinaryOp::LogAnd: r = ConstVal::Int((a.i != 0 || a.isFloat && a.f != 0) && (b.i != 0 || b.isFloat && b.f != 0) ? 1 : 0); break;
-                case BinaryOp::LogOr: r = ConstVal::Int((a.i != 0 || a.isFloat && a.f != 0) || (b.i != 0 || b.isFloat && b.f != 0) ? 1 : 0); break;
+                case BinaryOp::LogAnd: r = ConstVal::Int(((a.i != 0) || (a.isFloat && a.f != 0)) && ((b.i != 0) || (b.isFloat && b.f != 0)) ? 1 : 0); break;
+                case BinaryOp::LogOr: r = ConstVal::Int(((a.i != 0) || (a.isFloat && a.f != 0)) || ((b.i != 0) || (b.isFloat && b.f != 0)) ? 1 : 0); break;
             }
             break;
         }

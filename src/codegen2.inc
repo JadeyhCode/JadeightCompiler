@@ -116,9 +116,9 @@ void CodeGen::emitExpr(Expr* e, FuncInstance* inst) {
             int rel = stringRelOff_.count(e->strVal) ? stringRelOff_[e->strVal] : 0;
             uint64_t abs = static_cast<uint64_t>(dataStart_) + static_cast<uint64_t>(rel);
             pushReg(kBcBase, 8);
-            ins(kRegMovi(VmNum::U64), "R1, " + std::to_string(abs));
+            insT(OP_MOVI, kRegMovi(VmNum::U64), "R1, " + std::to_string(abs));
             pushReg(1, 8);
-            ins(OP_ADD_PTR);
+            insT(OP_ADD, TD_PTR);
             break;
         }
         case ExprKind::VarRef: {
@@ -156,7 +156,7 @@ void CodeGen::emitExpr(Expr* e, FuncInstance* inst) {
                     if (w <= 0) w = 8;
                     pushConst(w, 0);
                     emitExpr(e->lhs.get(), inst);
-                    ins(kSub(vmNum(t)));
+                    insT(OP_SUB, kSub(vmNum(t)));
                     break;
                 }
                 case UnaryOp::Pos:
@@ -165,20 +165,20 @@ void CodeGen::emitExpr(Expr* e, FuncInstance* inst) {
                 case UnaryOp::Not: {
                     emitExpr(e->lhs.get(), inst);
                     Type* lt = e->lhs->type;
-                    if (lt->isFloat()) { pushConst(8, 0); ins(OP_CMP_EQ_F64); emitBoolNot(); }
-                    else if (lt->kind == TypeKind::Ptr) { pushConst(8, 0); ins(OP_CMP_EQ_PTR); emitBoolNot(); }
+                    if (lt->isFloat()) { pushConst(8, 0); insCmp(CMP_EQ, TD_F64); emitBoolNot(); }
+                    else if (lt->kind == TypeKind::Ptr) { pushConst(8, 0); insCmp(CMP_EQ, TD_PTR); emitBoolNot(); }
                     else {
                         int w = typeWidth(lt);
                         if (w <= 0) w = 8;
                         pushConst(w, 0);
-                        ins(opCmpEQ(vmNum(lt)));
+                        insCmp(CMP_EQ, opCmpEQ(vmNum(lt)));
                         emitBoolNot();
                     }
                     break;
                 }
                 case UnaryOp::BitNot: {
                     emitExpr(e->lhs.get(), inst);
-                    ins(kNot(vmNum(t)));
+                    insT(OP_NOT, kNot(vmNum(t)));
                     break;
                 }
                 case UnaryOp::Deref: {
@@ -332,7 +332,7 @@ void CodeGen::loadThroughAddress(Type* t, FuncInstance* inst) {
         loadSlot(0, 8, tempOffset(inst, 0));
         pushReg(0, 8);
         pushConst(8, 8);
-        ins(OP_ADD_PTR);
+        insT(OP_ADD, TD_PTR);
         popReg(0, 8);
         storeSlot(0, 8, tempOffset(inst, 1));
         loadPtr(0, 8, tempOffset(inst, 1));
@@ -384,12 +384,12 @@ void CodeGen::emitAddress(Expr* e, FuncInstance* inst) {
                 pushReg(0, 8);                          // e as u64
                 if (compSize != 1) {
                     pushConst(8, static_cast<uint64_t>(compSize));
-                    ins(OP_MUL_U64);
+                    insT(OP_MUL, TD_U64);
                 }
-                ins(OP_ADD_PTR);
+                insT(OP_ADD, TD_PTR);
                 if (fieldOff != 0) {
                     pushConst(8, static_cast<uint64_t>(fieldOff));
-                    ins(OP_ADD_PTR);
+                    insT(OP_ADD, TD_PTR);
                 }
                 break;
             }
@@ -412,7 +412,7 @@ void CodeGen::emitAddress(Expr* e, FuncInstance* inst) {
                         if (f.name == e->name) {
                             if (f.offset != 0) {
                                 pushConst(8, static_cast<uint64_t>(f.offset));
-                                ins(OP_ADD_PTR);
+                                insT(OP_ADD, TD_PTR);
                             }
                             break;
                         }
@@ -438,9 +438,9 @@ void CodeGen::emitAddress(Expr* e, FuncInstance* inst) {
             if (elem) size = sema_->sizeOf(elem);
             if (size > 1) {
                 pushConst(8, static_cast<uint64_t>(size));
-                ins(OP_MUL_U64);
+                insT(OP_MUL, TD_U64);
             }
-            ins(OP_ADD_PTR);
+            insT(OP_ADD, TD_PTR);
             break;
         }
         default:
@@ -470,18 +470,18 @@ void CodeGen::emitBoolFlag(Expr* e, FuncInstance* inst) {
     Type* t = e->type;
     if (t && t->isFloat()) {
         pushConst(8, 0);
-        ins(OP_CMP_EQ_F64);
+        insCmp(CMP_EQ, TD_F64);
         emitBoolNot();
     } else if (t && t->kind == TypeKind::Ptr) {
         pushConst(8, 0);
-        ins(OP_CMP_EQ_PTR);
+        insCmp(CMP_EQ, TD_PTR);
         emitBoolNot();
     } else if (t && (t->isInt() || t->kind == TypeKind::Ent || t->kind == TypeKind::Bool ||
                      t->kind == TypeKind::Char)) {
         int w = typeWidth(t);
         if (w <= 0) w = 8;
         pushConst(w, 0);
-        ins(opCmpEQ(vmNum(t)));
+        insCmp(CMP_EQ, opCmpEQ(vmNum(t)));
         emitBoolNot();
     } else {
         em_.popD(8);
@@ -491,18 +491,18 @@ void CodeGen::emitBoolFlag(Expr* e, FuncInstance* inst) {
 
 // ---------------- 运算 ----------------
 void CodeGen::emitBoolNot() {
-    ins(kNot(VmNum::U8));        // 直接发射 NOT_U8，避免递归
+    insT(OP_NOT, kNot(VmNum::U8));        // 直接发射 NOT_U8，避免递归
     pushConst(1, 1);
-    ins(kAnd(VmNum::U8));
+    insT(OP_AND, kAnd(VmNum::U8));
 }
 
 void CodeGen::emitBinaryOp(BinaryOp op, Type* t, FuncInstance* inst) {
     VmNum n = vmNum(t);
     switch (op) {
-        case BinaryOp::Add: ins(kAdd(n)); break;
-        case BinaryOp::Sub: ins(kSub(n)); break;
-        case BinaryOp::Mul: ins(opMul(n)); break;
-        case BinaryOp::Div: ins(opDiv(n)); break;
+        case BinaryOp::Add: insT(OP_ADD, kAdd(n)); break;
+        case BinaryOp::Sub: insT(OP_SUB, kSub(n)); break;
+        case BinaryOp::Mul: insT(OP_MUL, opMul(n)); break;
+        case BinaryOp::Div: insT(OP_DIV, opDiv(n)); break;
         case BinaryOp::Mod: {
             // a % b = a - (a/b)*b
             int w = vmW(n);
@@ -512,21 +512,21 @@ void CodeGen::emitBinaryOp(BinaryOp op, Type* t, FuncInstance* inst) {
             storeSlot(1, w, tempOffset(inst, 1));   // a
             loadSlot(0, w, tempOffset(inst, 1)); pushReg(0, w);
             loadSlot(0, w, tempOffset(inst, 0)); pushReg(0, w);
-            ins(opDiv(n));
+            insT(OP_DIV, opDiv(n));
             loadSlot(0, w, tempOffset(inst, 0)); pushReg(0, w);
-            ins(opMul(n));
+            insT(OP_MUL, opMul(n));
             popReg(0, w);
             storeSlot(0, w, tempOffset(inst, 2));   // q*b -> temp2
             loadSlot(0, w, tempOffset(inst, 1)); pushReg(0, w);  // a
             loadSlot(0, w, tempOffset(inst, 2)); pushReg(0, w);  // q*b
-            ins(kSub(n));
+            insT(OP_SUB, kSub(n));
             em_.popD(w);
             break;
         }
-        case BinaryOp::Shl: ins(kShl(n)); break;
-        case BinaryOp::Shr: ins(t->isSigned() ? kShri(n) : kShr(n)); break;
-        case BinaryOp::And: ins(kAnd(n)); break;
-        case BinaryOp::Or: ins(kOr(n)); break;
+        case BinaryOp::Shl: insT(OP_SHL, kShl(n)); break;
+        case BinaryOp::Shr: insT(OP_SHR, t->isSigned() ? kShri(n) : kShr(n)); break;
+        case BinaryOp::And: insT(OP_AND, kAnd(n)); break;
+        case BinaryOp::Or: insT(OP_OR, kOr(n)); break;
         case BinaryOp::Xor: {
             int w = vmW(n);
             popReg(0, w);
@@ -535,13 +535,13 @@ void CodeGen::emitBinaryOp(BinaryOp op, Type* t, FuncInstance* inst) {
             storeSlot(1, w, tempOffset(inst, 1));   // a
             loadSlot(0, w, tempOffset(inst, 1)); pushReg(0, w);
             loadSlot(0, w, tempOffset(inst, 0)); pushReg(0, w);
-            ins(kNot(n));
-            ins(kAnd(n));
+            insT(OP_NOT, kNot(n));
+            insT(OP_AND, kAnd(n));
             loadSlot(0, w, tempOffset(inst, 1)); pushReg(0, w);
-            ins(kNot(n));
+            insT(OP_NOT, kNot(n));
             loadSlot(0, w, tempOffset(inst, 0)); pushReg(0, w);
-            ins(kAnd(n));
-            ins(kOr(n));
+            insT(OP_AND, kAnd(n));
+            insT(OP_OR, kOr(n));
             em_.popD(w);
             break;
         }
@@ -555,12 +555,12 @@ void CodeGen::emitCompare(BinaryOp op, Type* t, FuncInstance* inst) {
     VmNum n = vmNum(t);
     int w = vmW(n);
     switch (op) {
-        case BinaryOp::Lt: ins(opCmpLT(n)); break;
-        case BinaryOp::Gt: ins(opCmpGT(n)); break;
-        case BinaryOp::Le: ins(opCmpGT(n)); emitBoolNot(); break;
-        case BinaryOp::Ge: ins(opCmpLT(n)); emitBoolNot(); break;
-        case BinaryOp::Eq: ins(opCmpEQ(n)); break;
-        case BinaryOp::Ne: ins(opCmpEQ(n)); emitBoolNot(); break;
+        case BinaryOp::Lt: insCmp(CMP_LT, opCmpLT(n)); break;
+        case BinaryOp::Gt: insCmp(CMP_GT, opCmpGT(n)); break;
+        case BinaryOp::Le: insCmp(CMP_GT, opCmpGT(n)); emitBoolNot(); break;
+        case BinaryOp::Ge: insCmp(CMP_LT, opCmpLT(n)); emitBoolNot(); break;
+        case BinaryOp::Eq: insCmp(CMP_EQ, opCmpEQ(n)); break;
+        case BinaryOp::Ne: insCmp(CMP_EQ, opCmpEQ(n)); emitBoolNot(); break;
         default: break;
     }
     em_.popD(w * 2);
@@ -588,9 +588,9 @@ void CodeGen::coerceOnStack(Type* from, Type* to, FuncInstance* inst) {
             auto wi = sema_->witnessIndex.find(to->name + "::" + *typeName);
             int rel = (wi != sema_->witnessIndex.end()) ? sema_->witnesses[wi->second].dataOff : 0;
             uint64_t abs = static_cast<uint64_t>(dataStart_) + static_cast<uint64_t>(rel);
-            ins(kRegMovi(VmNum::U64), "R1, " + std::to_string(abs));
+            insT(OP_MOVI, kRegMovi(VmNum::U64), "R1, " + std::to_string(abs));
             pushReg(1, 8);
-            ins(OP_ADD_PTR);
+            insT(OP_ADD, TD_PTR);
             return;
         }
         return;
@@ -605,7 +605,7 @@ void CodeGen::coerceOnStack(Type* from, Type* to, FuncInstance* inst) {
         int w = typeWidth(from);
         if (w <= 0) w = 8;
         pushConst(w, 0);
-        ins(opCmpEQ(vmNum(from)));
+        insCmp(CMP_EQ, opCmpEQ(vmNum(from)));
         emitBoolNot();
         return;
     }
@@ -634,11 +634,11 @@ void CodeGen::coerceOnStack(Type* from, Type* to, FuncInstance* inst) {
                         int shift = (wt - wf) * 8;
                         pushReg(0, wt);
                         pushConst(wt, static_cast<uint64_t>(shift));
-                        ins(kShl(vmNum(to)));
+                        insT(OP_SHL, kShl(vmNum(to)));
                         popReg(0, wt);
                         pushReg(0, wt);
                         pushConst(wt, static_cast<uint64_t>(shift));
-                        ins(kShri(vmNum(to)));
+                        insT(OP_SHR, kShri(vmNum(to)));
                     } else {
                         pushReg(0, wt);   // 零扩展
                     }
@@ -650,7 +650,7 @@ void CodeGen::coerceOnStack(Type* from, Type* to, FuncInstance* inst) {
             }
             if (ff && !tf) {
                 if (wt == 4) {
-                    ins(to->isSigned() ? OP_CVT_F64_I32 : OP_CVT_F64_U32);
+                    insCvt(TD_F64, to->isSigned() ? TD_I32 : TD_U32);
                 } else {
                     callHelper(to->isSigned() ? "__i64_from_f64" : "__u64_from_f64", 8, inst);
                 }
@@ -663,7 +663,7 @@ void CodeGen::coerceOnStack(Type* from, Type* to, FuncInstance* inst) {
                     w = 4;
                 }
                 if (w == 4) {
-                    ins(from->isSigned() ? OP_CVT_I32_F64 : OP_CVT_U32_F64);
+                    insCvt(from->isSigned() ? TD_I32 : TD_U32, TD_F64);
                 } else {
                     callHelper(from->isSigned() ? "__f64_from_i64" : "__f64_from_u64", 8, inst);
                 }
@@ -710,7 +710,7 @@ void CodeGen::emitAssign(Expr* e, FuncInstance* inst) {
         loadSlot(0, 8, tempOffset(inst, 2));
         pushReg(0, 8);
         pushConst(8, 8);
-        ins(OP_ADD_PTR);
+        insT(OP_ADD, TD_PTR);
         popReg(0, 8);
         storeSlot(0, 8, tempOffset(inst, 3));
         storePtr(0, 8, tempOffset(inst, 3));    // *(addr+8) = vt
@@ -747,7 +747,7 @@ void CodeGen::emitCompoundAssign(Expr* e, FuncInstance* inst) {
         emitAddress(e->lhs.get(), inst);
         emitExpr(e->rhs.get(), inst);
         coerceOnStack(e->rhs->type, Type::make(TypeKind::U64), inst);
-        ins(OP_ADD_PTR);
+        insT(OP_ADD, TD_PTR);
         popReg(0, 8);
         popReg(1, 8);
         storeSlot(1, 8, tempOffset(inst, 0));
@@ -781,7 +781,7 @@ void CodeGen::emitIncDec(Expr* e, FuncInstance* inst) {
         loadPtr(0, 8, tempOffset(inst, 0));
         pushReg(0, 8);
         pushConst(8, 1);
-        ins(inc ? OP_ADD_PTR : OP_SUB_PTR);
+        insT(inc ? OP_ADD : OP_SUB, TD_PTR);
         popReg(1, 8);
         storePtr(1, 8, tempOffset(inst, 0));
         pushReg(1, 8);
@@ -792,7 +792,7 @@ void CodeGen::emitIncDec(Expr* e, FuncInstance* inst) {
     loadPtr(0, w, tempOffset(inst, 0));     // R0 = old
     pushReg(0, w);                          // [old]
     pushConst(w, 1);
-    ins(inc ? kAdd(vmNum(t)) : kSub(vmNum(t)));   // [new]
+    if (inc) insT(OP_ADD, kAdd(vmNum(t))); else insT(OP_SUB, kSub(vmNum(t)));   // [new]
     popReg(1, w);
     storePtr(1, w, tempOffset(inst, 0));    // *addr = new
     if (pre) {
@@ -812,31 +812,25 @@ void CodeGen::callHelper(const std::string& name, int argWidth, FuncInstance* in
     FuncInstance* h = helper(name);
     if (!h) { pushConst(8, 0); return; }
     int idx = instanceIndex(h);
-    int off = em_.counting ? 0 : codeOff_[idx];
     // 参数已在栈上（caller 的 sp）：先取出，SCOPE_PUSH 后再放回帧内
     popReg(0, argWidth);
     ins(OP_SCOPE_PUSH, "", "call helper " + name);
+    if (h->retBytes > 0) { ins(OP_STACK_ALLOC, std::to_string(h->retBytes), "ret area"); em_.pushD(h->retBytes); }
     pushReg(0, argWidth);
-    int retOff = em_.pc + 31 + (em_.counting ? 0 : codeOff_[curFuncIdx_]);
-    ins(kRegPush(VmNum::U64), "R12");
-    ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(retOff));
-    pushReg(0, 8);
-    em_.popD(8);   // 调用机械部分记账归零
-    ins(OP_ADD_U64);
-    ins(kRegPush(VmNum::U64), "R12");
-    ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(off));
-    pushReg(0, 8);
-    em_.popD(8);
-    ins(OP_ADD_U64);
-    ins(OP_JMP_IND);
-    ins(OP_STACK_PTR_MOVE, std::to_string(argWidth), "pop helper args");
-    em_.popD(argWidth);
-    ins(OP_SCOPE_POP);   // sp 恢复到调用前位置
+    // 帧基址 X = 当前 sp：CALL 以调用者 sp 作为被调函数帧基址
+    const int frameAbove = h->retBytes + h->paramBytes;
+    if (frameAbove) { ins(OP_STACK_MOVE, std::to_string(frameAbove), "frame base"); em_.popD(frameAbove); }
+    ins(OP_CALL, std::to_string(idx) + ", " + std::to_string(h->retBytes) + ", 0", "call helper " + name);
+    if (h->retBytes > 0) {
+        int w = h->retType && typeWidth(h->retType) > 0 ? typeWidth(h->retType) : 8;
+        loadSlot(0, w, 0);
+    }
+    ins(OP_SCOPE_POP);
+    if (h->retBytes > 0) pushReg(0, h->retBytes);
 }
 
 void CodeGen::emitStaticCall(FuncInstance* callee, std::vector<ExprPtr>& args, FuncInstance* inst) {
     int idx = instanceIndex(callee);
-    int calleeOff = em_.counting ? 0 : codeOff_[idx];
     if (args.size() > 8) {
         Diag::error({0, 0}, "internal: too many arguments (>8)");
         return;
@@ -854,7 +848,7 @@ void CodeGen::emitStaticCall(FuncInstance* callee, std::vector<ExprPtr>& args, F
     }
     ins(OP_SCOPE_PUSH, "", "call " + callee->key);
     if (callee->retBytes > 0) {
-        ins(OP_NEW_STACK, std::to_string(callee->retBytes), "ret area");
+        ins(OP_STACK_ALLOC, std::to_string(callee->retBytes), "ret area");
         em_.pushD(callee->retBytes);
     }
     for (size_t i = 0; i < args.size(); ++i) {
@@ -863,19 +857,12 @@ void CodeGen::emitStaticCall(FuncInstance* callee, std::vector<ExprPtr>& args, F
         if (w <= 0) w = 8;
         pushReg(4 + static_cast<int>(i), w);
     }
-    int retOff = em_.pc + 31 + (em_.counting ? 0 : codeOff_[curFuncIdx_]);
-    ins(kRegPush(VmNum::U64), "R12");
-    ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(retOff));
-    pushReg(0, 8);
-    em_.popD(8);   // 调用机械部分记账归零（真实 sp 由 SCOPE_POP/NEW_STACK 统一管理）
-    ins(OP_ADD_U64);
-    ins(kRegPush(VmNum::U64), "R12");
-    ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(calleeOff));
-    pushReg(0, 8);
-    em_.popD(8);
-    ins(OP_ADD_U64);
-    ins(OP_JMP_IND);
-    // 读返回值到寄存器（SCOPE_POP 会重置 sp，不能把值留在栈上）
+    // 帧基址 X：CALL 用「调用者 CALL 时的 sp」当被调函数帧基址，故先把 sp 收回 X。
+    // ret 区在 [X, X+retBytes)，参数在 [X+retBytes, …)，与 v2 的内存布局完全一致。
+    const int frameAbove = callee->retBytes + callee->paramBytes;
+    if (frameAbove) { ins(OP_STACK_MOVE, std::to_string(frameAbove), "frame base"); em_.popD(frameAbove); }
+    ins(OP_CALL, std::to_string(idx) + ", " + std::to_string(callee->retBytes) + ", 0", "call " + callee->key);
+    // 读返回值到寄存器（v3 的 RET 已把 sp/scope 还原，此处 sp 就是 X）
     if (callee->retBytes > 0) {
         if (callee->retType->isStruct()) {
             loadSlot(0, 8, 0);
@@ -888,10 +875,7 @@ void CodeGen::emitStaticCall(FuncInstance* callee, std::vector<ExprPtr>& args, F
             loadSlot(0, w, 0);
         }
     }
-    ins(OP_STACK_PTR_MOVE, std::to_string(callee->retBytes + callee->paramBytes), "pop call frame");
-    em_.popD(callee->retBytes + callee->paramBytes);
-    ins(OP_SCOPE_POP);   // sp 恢复到调用作用域基址 = 调用前 sp
-    // 压回返回值
+    ins(OP_SCOPE_POP);   // sp 恢复到调用前位置
     if (callee->retBytes > 0) {
         if (callee->retType->isStruct()) {
             pushReg(0, 8);
@@ -919,7 +903,6 @@ void CodeGen::emitObjectAddress(Expr* obj, FuncInstance* inst) {
 // 静态方法调用（obj.method(args)）
 void CodeGen::emitMethodCall(FuncInstance* callee, Expr* obj, std::vector<ExprPtr>& args, FuncInstance* inst) {
     int idx = instanceIndex(callee);
-    int calleeOff = em_.counting ? 0 : codeOff_[idx];
     if (args.size() + 1 > 8) {
         Diag::error({0, 0}, "internal: too many arguments (>7)");
         return;
@@ -939,7 +922,7 @@ void CodeGen::emitMethodCall(FuncInstance* callee, Expr* obj, std::vector<ExprPt
     }
     ins(OP_SCOPE_PUSH, "", "method " + callee->key);
     if (callee->retBytes > 0) {
-        ins(OP_NEW_STACK, std::to_string(callee->retBytes), "ret area");
+        ins(OP_STACK_ALLOC, std::to_string(callee->retBytes), "ret area");
         em_.pushD(callee->retBytes);
     }
     pushReg(4, 8);
@@ -949,18 +932,9 @@ void CodeGen::emitMethodCall(FuncInstance* callee, Expr* obj, std::vector<ExprPt
         if (w <= 0) w = 8;
         pushReg(5 + static_cast<int>(i), w);
     }
-    int retOff = em_.pc + 31 + (em_.counting ? 0 : codeOff_[curFuncIdx_]);
-    ins(kRegPush(VmNum::U64), "R12");
-    ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(retOff));
-    pushReg(0, 8);
-    em_.popD(8);   // 调用机械部分记账归零
-    ins(OP_ADD_U64);
-    ins(kRegPush(VmNum::U64), "R12");
-    ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(calleeOff));
-    pushReg(0, 8);
-    em_.popD(8);
-    ins(OP_ADD_U64);
-    ins(OP_JMP_IND);
+    const int frameAbove = callee->retBytes + callee->paramBytes;
+    if (frameAbove) { ins(OP_STACK_MOVE, std::to_string(frameAbove), "frame base"); em_.popD(frameAbove); }
+    ins(OP_CALL, std::to_string(idx) + ", " + std::to_string(callee->retBytes) + ", 0", "call " + callee->key);
     // 读返回值到寄存器（SCOPE_POP 会重置 sp）
     if (callee->retBytes > 0) {
         if (callee->retType->isStruct()) {
@@ -974,8 +948,6 @@ void CodeGen::emitMethodCall(FuncInstance* callee, Expr* obj, std::vector<ExprPt
             loadSlot(0, w, 0);
         }
     }
-    ins(OP_STACK_PTR_MOVE, std::to_string(callee->retBytes + callee->paramBytes), "pop method frame");
-    em_.popD(callee->retBytes + callee->paramBytes);
     ins(OP_SCOPE_POP);   // sp 恢复到调用前位置
     // 压回返回值
     if (callee->retBytes > 0) {
@@ -1032,7 +1004,7 @@ void CodeGen::emitDynamicCall(Expr* e, FuncInstance* inst) {
         loadSlot(0, 8, tempOffset(inst, 0));
         pushReg(0, 8);
         pushConst(8, static_cast<uint64_t>(mIdx) * 4);
-        ins(OP_ADD_PTR);
+        insT(OP_ADD, TD_PTR);
         popReg(0, 8);
         storeSlot(0, 8, tempOffset(inst, 1));       // temp1 = vt+mIdx*4
         loadPtr(2, 4, tempOffset(inst, 1));         // R2 = 方法偏移
@@ -1053,7 +1025,7 @@ void CodeGen::emitDynamicCall(Expr* e, FuncInstance* inst) {
         // === 新作用域：压 this + 参数 + 调用 ===
         ins(OP_SCOPE_PUSH, "", "dynamic dispatch " + std::string(e->name));
         if (retBytes > 0) {
-            ins(OP_NEW_STACK, std::to_string(retBytes), "ret area");
+            ins(OP_STACK_ALLOC, std::to_string(retBytes), "ret area");
             em_.pushD(retBytes);
         }
         pushReg(3, 8);   // this（data 指针）
@@ -1063,19 +1035,23 @@ void CodeGen::emitDynamicCall(Expr* e, FuncInstance* inst) {
             if (w <= 0) w = 8;
             pushReg(5 + static_cast<int>(i), w);
         }
-        // retaddr（后续指令：PUSH(2)+MOVI(10)+PUSH(2)+ADD(1)+PUSH(2)+PUSH(2)+ADD(1)+JMP_IND(1)=21 字节）
-        int retOff = em_.pc + 21 + (em_.counting ? 0 : codeOff_[curFuncIdx_]);
-        ins(kRegPush(VmNum::U64), "R12");
-        ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(retOff));
-        pushReg(0, 8);
-        em_.popD(8);   // 调用机械部分记账归零
-        ins(OP_ADD_U64);
-        // target = bcBase + off
-        ins(kRegPush(VmNum::U64), "R12");
+        // 帧基址 X：先收 sp，再把目标绝对地址压顶；CALL_IND 弹掉它，sp 恰好回到 X
+        int argBytesAll = 8;
+        for (size_t i = 0; i < e->args.size(); ++i) {
+            Type* at = (i < protoParamTypes.size()) ? protoParamTypes[i] : e->args[i]->type;
+            argBytesAll += at->isStruct() ? 8 : (at->kind == TypeKind::Exist ? 16 : typeWidth(at));
+        }
+        // target = bcBase + off → R3（先算到寄存器，免得压栈压进帧里）
+        insT(OP_PUSH_REG, kRegPush(VmNum::U64), "R12");
+        em_.pushD(8);
         pushReg(2, 8);
+        insT(OP_ADD, TD_U64);
         em_.popD(8);
-        ins(OP_ADD_U64);
-        ins(OP_JMP_IND);
+        popReg(3, 8);
+        // sp 收回帧基址 X，再 CALL_IND（目标从寄存器取，不占栈）
+        ins(OP_STACK_MOVE, std::to_string(retBytes + argBytesAll), "frame base");
+        em_.popD(retBytes + argBytesAll);
+        ins(OP_CALL_IND, "R3, " + std::to_string(retBytes) + ", 0", "dynamic dispatch");
         // 返回值读取到寄存器（SCOPE_POP 会重置 sp）
         if (rt && rt->isStruct()) {
             loadSlot(0, 8, 0);
@@ -1093,9 +1069,7 @@ void CodeGen::emitDynamicCall(Expr* e, FuncInstance* inst) {
             Type* at = (i < protoParamTypes.size()) ? protoParamTypes[i] : e->args[i]->type;
             argBytes += at->isStruct() ? 8 : (at->kind == TypeKind::Exist ? 16 : typeWidth(at));
         }
-        ins(OP_STACK_PTR_MOVE, std::to_string(retBytes + argBytes), "pop method args");
-        em_.popD(retBytes + argBytes);
-        ins(OP_SCOPE_POP);   // sp 恢复到调用前位置
+        ins(OP_SCOPE_POP);   // sp 恢复到调用前位置（帧由 CALL_IND/RET 还原）
         // 压回返回值
         if (rt && rt->isStruct()) {
             pushReg(0, 8);
@@ -1145,7 +1119,7 @@ void CodeGen::emitExternCall(Expr* e, FuncInstance* inst) {
         pushReg(4 + static_cast<int>(i), w);
     }
     if (retBytes > 0) {
-        ins(OP_NEW_STACK, std::to_string(retBytes), "extern ret area");
+        ins(OP_STACK_ALLOC, std::to_string(retBytes), "extern ret area");
         em_.pushD(retBytes);
     }
     ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 " + std::to_string(argBytes));
@@ -1153,7 +1127,7 @@ void CodeGen::emitExternCall(Expr* e, FuncInstance* inst) {
     if (retBytes > 0) {
         loadSlot(0, retBytes, argBytes);
     }
-    ins(OP_STACK_PTR_MOVE, std::to_string(argBytes + retBytes), "pop extern frame");
+    ins(OP_STACK_MOVE, std::to_string(argBytes + retBytes), "pop extern frame");
     em_.popD(argBytes + retBytes);
     ins(OP_SCOPE_POP);   // sp 恢复到调用前位置
     if (retBytes > 0) {
@@ -1177,7 +1151,7 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
     if (name == "printc") {
         emitExpr(e->args[0].get(), inst);
         coerceOnStack(e->args[0]->type, Type::make(TypeKind::U8), inst);
-        ins(OP_COUT_CHAR8, "", "printc");
+        insT(OP_COUT, TD_U8, "", "printc");
         em_.popD(1);
         return;
     }
@@ -1185,7 +1159,7 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         Type* at = e->args[0]->type;
         emitExpr(e->args[0].get(), inst);
         coerceOnStack(at, Type::make(TypeKind::F64), inst);
-        ins(name == "sqrt" ? OP_SQRT_F64 : OP_LOG_F64);
+        insT(name == "sqrt" ? OP_SQRT : OP_LOG, TD_F64);
         return;
     }
     if (name == "getsystem") {
@@ -1206,15 +1180,11 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         ins(OP_SCOPE_PUSH, "", "dl_reg");
         pushReg(4, 8);
         pushReg(5, 8);
-        ins(OP_DL_REG, "0 8", "dl_reg");
-        em_.pushD(4);                     // VM 压入 u32 索引
-        popReg(0, 4);
-        em_.popD(4);
-        ins(OP_STACK_PTR_MOVE, "16");
-        em_.popD(16);
+        // v3：DL_REG(fnOff, sigOff, outOff) 把索引写进槽，不再压栈
+        ins(OP_DL_REG, "0 8 " + std::to_string(tempOffset(inst, 2)), "dl_reg");
+        loadSlot(0, 4, tempOffset(inst, 2));
         ins(OP_SCOPE_POP);
         pushReg(0, 4);                    // 结果 u32
-        em_.pushD(4);
         return;
     }
     if (name == "dl_call") {
@@ -1251,11 +1221,11 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
             int w = typeWidth(at ? at : Type::make(TypeKind::U64));
             pushReg(5 + static_cast<int>(i), w);
         }
-        if (retBytes > 0) { ins(OP_NEW_STACK, std::to_string(retBytes), "dl ret"); em_.pushD(retBytes); }
+        if (retBytes > 0) { ins(OP_STACK_ALLOC, std::to_string(retBytes), "dl ret"); em_.pushD(retBytes); }
         // 布局：idx(4B, base+0) → 参数(base+4..) → 返回值(base+4+argBytes)
         ins(OP_DL_CALL, "0 4 " + std::to_string(4 + argBytes));
         if (retBytes > 0) loadSlot(0, retBytes, 4 + argBytes);
-        ins(OP_STACK_PTR_MOVE, std::to_string(8 + argBytes + retBytes), "pop dl frame");
+        ins(OP_STACK_MOVE, std::to_string(8 + argBytes + retBytes), "pop dl frame");
         em_.popD(8 + argBytes + retBytes);
         ins(OP_SCOPE_POP);
         if (retBytes > 0) pushReg(0, retBytes);
@@ -1272,11 +1242,11 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         ins(OP_SCOPE_PUSH, "", "dload");
         pushReg(4, 8);                      // base+0: 路径（8B）
         pushReg(5, 4);                      // base+8: 标志（4B）
-        ins(OP_NEW_STACK, "8", "dlopen ret");
+        ins(OP_STACK_ALLOC, "8", "dlopen ret");
         em_.pushD(8);
         ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 12"); // argBytes = 8+4
         loadSlot(0, 8, 12);
-        ins(OP_STACK_PTR_MOVE, "20");
+        ins(OP_STACK_MOVE, "20");
         em_.popD(20);
         ins(OP_SCOPE_POP);
         pushReg(0, 8);
@@ -1298,16 +1268,15 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
     }
     if (name == "manager_addr") {
         ins(OP_GET_ADDRS);
-        ins(kRegPop(VmNum::U64), "R0", "mgr");
-        ins(kRegPop(VmNum::U64), "R1");
-        ins(kRegPop(VmNum::U64), "R2");
-        ins(kRegPop(VmNum::U64), "R3");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R0", "mgr");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R1");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R2");
+        insT(OP_POP_REG, kRegPop(VmNum::U64), "R3");
         pushReg(0, 8);
         return;
     }
     if (name.rfind("atomic_", 0) == 0) {
         bool is64 = name.find("u64") != std::string::npos;
-        VmNum n = is64 ? VmNum::U64 : VmNum::U32;
         int w = is64 ? 8 : 4;
         Type* wt = is64 ? Type::make(TypeKind::U64) : Type::make(TypeKind::U32);
         emitExpr(e->args[0].get(), inst);
@@ -1316,27 +1285,27 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
         // 值参数必须 coerce 到目标宽度：字面量压 4 字节（u32），u64 指令 popReg(0,8)
         // 会多弹 4 字节导致栈错位（历史 bug：42 被写成 42<<32）
         if (name.find("atomic_load") == 0) {
-            ins(is64 ? OP_ATOMIC_LOAD_U64 : OP_ATOMIC_LOAD_U32,
+            insT(OP_ATOMIC_LOAD, is64 ? TD_U64 : TD_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
             pushReg(0, w);
         } else if (name.find("atomic_store") == 0) {
             emitExpr(e->args[1].get(), inst);
             coerceOnStack(e->args[1]->type, wt, inst);
             popReg(0, w);
-            ins(is64 ? OP_ATOMIC_STORE_U64 : OP_ATOMIC_STORE_U32,
+            insT(OP_ATOMIC_STORE, is64 ? TD_U64 : TD_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
         } else if (name.find("atomic_xchg") == 0) {
             emitExpr(e->args[1].get(), inst);
             coerceOnStack(e->args[1]->type, wt, inst);
             popReg(0, w);
-            ins(is64 ? OP_ATOMIC_XCHG_U64 : OP_ATOMIC_XCHG_U32,
+            insT(OP_ATOMIC_XCHG, is64 ? TD_U64 : TD_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
             pushReg(0, w);
         } else if (name.find("atomic_add") == 0) {
             emitExpr(e->args[1].get(), inst);
             coerceOnStack(e->args[1]->type, wt, inst);
             popReg(0, w);
-            ins(is64 ? OP_ATOMIC_ADD_U64 : OP_ATOMIC_ADD_U32,
+            insT(OP_ATOMIC_ADD, is64 ? TD_U64 : TD_U32,
                 "R0, 1, " + std::to_string(tempOffset(inst, 0)));
             pushReg(0, w);
         } else if (name.find("atomic_cas") == 0) {
@@ -1349,7 +1318,7 @@ void CodeGen::emitCallExpr(Expr* e, FuncInstance* inst) {
             emitExpr(e->args[1].get(), inst);
             coerceOnStack(e->args[1]->type, wt, inst);
             // 栈顶 = expected（w 字节）；指令弹 expected、压 U8 标志
-            ins(is64 ? OP_ATOMIC_CAS_U64 : OP_ATOMIC_CAS_U32,
+            insT(OP_ATOMIC_CAS, is64 ? TD_U64 : TD_U32,
                 "R3, 1, " + std::to_string(tempOffset(inst, 0)));
             em_.popD(w);
             em_.pushD(1);
@@ -1392,7 +1361,7 @@ void CodeGen::externMemcpy(Expr* e, FuncInstance* inst) {
     ins(OP_SCOPE_PUSH, "", "extern memcpy");
     for (int i = 0; i < n; ++i) pushReg(4 + i, 8);
     ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 24");
-    ins(OP_STACK_PTR_MOVE, "24");
+    ins(OP_STACK_MOVE, "24");
     em_.popD(24);
     ins(OP_SCOPE_POP);
 }
@@ -1407,7 +1376,7 @@ void CodeGen::externFree(Expr* e, FuncInstance* inst) {
     ins(OP_SCOPE_PUSH, "", "extern free");
     pushReg(4, 8);
     ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 8");
-    ins(OP_STACK_PTR_MOVE, "8");
+    ins(OP_STACK_MOVE, "8");
     em_.popD(8);
     ins(OP_SCOPE_POP);
 }
@@ -1422,12 +1391,12 @@ void CodeGen::emitNew(Expr* e, FuncInstance* inst) {
     coerceOnStack(e->rhs->type, Type::make(TypeKind::U64), inst);
     if (elemSize != 1) {
         pushConst(8, static_cast<uint64_t>(elemSize));
-        ins(OP_MUL_U64);
+        insT(OP_MUL, TD_U64);
     }
     ins(OP_EXTERN_CALL, std::to_string(idx) + " 0 8");
     loadSlot(0, 8, 8);
     pushReg(0, 8);
-    ins(OP_STACK_PTR_MOVE, "16");
+    ins(OP_STACK_MOVE, "16");
     em_.popD(16);
     ins(OP_SCOPE_POP);
 }
@@ -1439,7 +1408,7 @@ void CodeGen::emitPrint(Expr* a, FuncInstance* inst) {
     if (!t) return;
     switch (t->kind) {
         case TypeKind::Char:
-            ins(OP_COUT_CHAR8, "", "print char");
+            insT(OP_COUT, TD_U8, "", "print char");
             em_.popD(1);
             break;
         case TypeKind::Bool:
@@ -1449,17 +1418,17 @@ void CodeGen::emitPrint(Expr* a, FuncInstance* inst) {
         case TypeKind::U8:
             popReg(0, 1);
             pushReg(0, 4);
-            ins(OP_COUT_CHAR32, "", "print u8");
+            insT(OP_COUT, TD_U32, "", "print u8");
             em_.popD(4);
             break;
         case TypeKind::U16:
             popReg(0, 2);
             pushReg(0, 4);
-            ins(OP_COUT_CHAR32, "", "print u16");
+            insT(OP_COUT, TD_U32, "", "print u16");
             em_.popD(4);
             break;
         case TypeKind::U32: case TypeKind::Ent:
-            ins(OP_COUT_CHAR32, "", "print u32");
+            insT(OP_COUT, TD_U32, "", "print u32");
             em_.popD(4);
             break;
         case TypeKind::U64:
@@ -1495,7 +1464,7 @@ void CodeGen::emitPrint(Expr* a, FuncInstance* inst) {
 void CodeGen::worldAddr(uint64_t off) {
     pushReg(kWorld, 8);
     pushConst(8, off);
-    ins(OP_ADD_PTR);
+    insT(OP_ADD, TD_PTR);
 }
 
 void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, const std::string& tmpl) {
@@ -1514,7 +1483,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         // count >= cap → 错误
         pushReg(2, 4);
         pushReg(3, 4);
-        ins(OP_CMP_LT_U32);                   // count < cap
+        insCmp(CMP_LT, TD_U32);                   // count < cap
         emitBoolNot();                 // count >= cap
         std::string lOk = newLabel("spawn_ok");
         std::string lFull = newLabel("spawn_full");
@@ -1528,18 +1497,18 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
                 if (s == "world full") { rel = r; break; }
             }
             pushReg(kBcBase, 8);
-            ins(kRegMovi(VmNum::U64), "R1, " + std::to_string(static_cast<uint64_t>(dataStart_) + rel));
+            insT(OP_MOVI, kRegMovi(VmNum::U64), "R1, " + std::to_string(static_cast<uint64_t>(dataStart_) + rel));
             pushReg(1, 8);
-            ins(OP_ADD_PTR);
+            insT(OP_ADD, TD_PTR);
             callHelper("__print_str", 8, inst);
-            ins(OP_END);
+            ins(OP_HALT);
         }
         label(lOk);
         // *(u32*)world = count + 1（R2 = 旧 count 存活）
         pushReg(2, 4);                        // 旧 count（返回值）
         pushReg(2, 4);
         pushConst(4, 1);
-        ins(OP_ADD_U32);
+        insT(OP_ADD, TD_U32);
         popReg(2, 4);                         // R2 = count+1
         worldAddr(0);
         popReg(1, 8);
@@ -1565,7 +1534,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         loadPtr(1, 4, t0);                     // R1 = count
         pushReg(3, 4);
         pushReg(1, 4);
-        ins(OP_CMP_LT_U32);                    // e < count
+        insCmp(CMP_LT, TD_U32);                    // e < count
         return;
     }
     if (name == "despawn") {
@@ -1578,11 +1547,11 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         // if (e+1 == count) count = e
         pushReg(3, 4);
         pushConst(4, 1);
-        ins(OP_ADD_U32);
+        insT(OP_ADD, TD_U32);
         popReg(2, 4);                          // R2 = e+1
         pushReg(2, 4);
         pushReg(1, 4);
-        ins(OP_CMP_EQ_U32);
+        insCmp(CMP_EQ, TD_U32);
         std::string lLast = newLabel("dsp_last");
         std::string lNot = newLabel("dsp_not");
         branchOnFlag(lLast, lNot);
@@ -1598,10 +1567,10 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
             int bitsetOff = clIt != sema_->compLayout.end() ? clIt->second.bitsetOff : 0;
             worldAddr(static_cast<uint64_t>(bitsetOff));   // [addr]
             pushReg(3, 8);                     // [addr][e]
-            ins(OP_ADD_PTR);                   // [addr+e]
+            insT(OP_ADD, TD_PTR);                   // [addr+e]
             popReg(1, 8);
             storeSlot(1, 8, t0);
-            ins(kRegMovi(VmNum::U8), "R2, 0");
+            insT(OP_MOVI, kRegMovi(VmNum::U8), "R2, 0");
             storePtr(2, 1, t0);
         }
         return;
@@ -1615,14 +1584,14 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         popReg(3, 4);                          // e → R3
         worldAddr(static_cast<uint64_t>(cl.bitsetOff));   // [addr]
         pushReg(3, 8);                         // [addr][e]
-        ins(OP_ADD_PTR);                       // [addr+e]
+        insT(OP_ADD, TD_PTR);                       // [addr+e]
         popReg(1, 8);
         storeSlot(1, 8, t0);
         if (name == "has") {
             loadPtr(1, 1, t0);
             pushReg(1, 1);
         } else {
-            ins(kRegMovi(VmNum::U8), "R2, 0");
+            insT(OP_MOVI, kRegMovi(VmNum::U8), "R2, 0");
             storePtr(2, 1, t0);
         }
         return;
@@ -1632,7 +1601,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         popReg(3, 4);                          // e → R3
         worldAddr(static_cast<uint64_t>(cl.bitsetOff));   // [addr]
         pushReg(3, 8);                         // [addr][e]
-        ins(OP_ADD_PTR);                       // [addr+e]
+        insT(OP_ADD, TD_PTR);                       // [addr+e]
         popReg(1, 8);
         storeSlot(1, 8, t0);
         loadPtr(1, 1, t0);                     // presence
@@ -1645,9 +1614,9 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         pushReg(3, 8);                         // [addr][e]
         if (cl.size != 1) {
             pushConst(8, static_cast<uint64_t>(cl.size));
-            ins(OP_MUL_U64);                   // [addr][e*size]
+            insT(OP_MUL, TD_U64);                   // [addr][e*size]
         }
-        ins(OP_ADD_PTR);                       // [addr+e*size]
+        insT(OP_ADD, TD_PTR);                       // [addr+e*size]
         std::string lEnd = newLabel("get_end");
         jumpTo(lEnd);
         label(lNone);
@@ -1661,19 +1630,19 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         // bitset[e] = 1
         worldAddr(static_cast<uint64_t>(cl.bitsetOff));   // [addr]
         pushReg(3, 8);                         // [addr][e]
-        ins(OP_ADD_PTR);                       // [addr+e]
+        insT(OP_ADD, TD_PTR);                       // [addr+e]
         popReg(1, 8);
         storeSlot(1, 8, t0);
-        ins(kRegMovi(VmNum::U8), "R2, 1");
+        insT(OP_MOVI, kRegMovi(VmNum::U8), "R2, 1");
         storePtr(2, 1, t0);
         // base = world + dataOff + e*size → t1
         worldAddr(static_cast<uint64_t>(cl.dataOff));     // [addr]
         pushReg(3, 8);                         // [addr][e]
         if (cl.size != 1) {
             pushConst(8, static_cast<uint64_t>(cl.size));
-            ins(OP_MUL_U64);                   // [addr][e*size]
+            insT(OP_MUL, TD_U64);                   // [addr][e*size]
         }
-        ins(OP_ADD_PTR);                       // [addr+e*size]
+        insT(OP_ADD, TD_PTR);                       // [addr+e*size]
         popReg(1, 8);
         storeSlot(1, 8, t1);
         // 逆序写入字段
@@ -1692,7 +1661,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
                 pushReg(1, 8);
                 if (cd->fields[i].offset != 0) {
                     pushConst(8, static_cast<uint64_t>(cd->fields[i].offset));
-                    ins(OP_ADD_PTR);
+                    insT(OP_ADD, TD_PTR);
                 }
                 popReg(1, 8);
                 storeSlot(1, 8, t2);
@@ -1714,7 +1683,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         storeSlot(1, 8, t0);
         loadPtr(0, 4, t0);
         storeSlot(0, 4, t3);
-        ins(kRegMovi(VmNum::U32), "R0, 0");
+        insT(OP_MOVI, kRegMovi(VmNum::U32), "R0, 0");
         storeSlot(0, 4, t4);
         std::string lTop = newLabel("run_top");
         std::string lBody = newLabel("run_body");
@@ -1724,7 +1693,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         loadSlot(1, 4, t3);
         pushReg(0, 4);
         pushReg(1, 4);
-        ins(OP_CMP_LT_U32);
+        insCmp(CMP_LT, TD_U32);
         branchOnFlag(lBody, lEnd);
         label(lBody);
         // 检查组件存在（lSkip 必须在循环外定义并 label：branchOnFlag 用 operator[] 查表，
@@ -1736,7 +1705,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
             loadSlot(1, 4, t4);                // e → R1（worldAddr 只破坏 R0）
             worldAddr(static_cast<uint64_t>(bitsetOff));   // [addr]
             pushReg(1, 8);                     // [addr][e]
-            ins(OP_ADD_PTR);                   // [addr+e]
+            insT(OP_ADD, TD_PTR);                   // [addr+e]
             popReg(2, 8);
             storeSlot(2, 8, t0);
             loadPtr(1, 1, t0);
@@ -1746,22 +1715,17 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
             label(lHas);
         }
         // 调用 update(e)（e 在 SCOPE_PUSH 前取出，避免基址错位）
+        // v3 约定：sp 收回帧基址 X 后 CALL；update(ent) 的 retBytes=0、paramBytes=4
         loadSlot(4, 4, t4);                    // R4 = e
-        ins(OP_SCOPE_PUSH, "", "run " + tmpl);
-        pushReg(4, 4);                         // arg e
-        int retOff = em_.pc + 31 + (em_.counting ? 0 : codeOff_[curFuncIdx_]);
-        ins(kRegPush(VmNum::U64), "R12");
-        ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(retOff));
-        pushReg(0, 8);
-        ins(OP_ADD_U64);
-        ins(kRegPush(VmNum::U64), "R12");
-        ins(kRegMovi(VmNum::U64), "R0, " + std::to_string(updOff));
-        pushReg(0, 8);
-        ins(OP_ADD_U64);
-        ins(OP_JMP_IND);
-        ins(OP_STACK_PTR_MOVE, "4");
-        em_.popD(4);
-        ins(OP_SCOPE_POP);
+        if (upd) {
+            ins(OP_SCOPE_PUSH, "", "run " + tmpl);
+            pushReg(4, 4);                         // 参数 e 落在 [X, X+4)
+            ins(OP_STACK_MOVE, "4", "frame base");
+            em_.popD(4);
+            ins(OP_CALL, std::to_string(updIdx) + ", 0, 0", "sys_" + tmpl + "_update(e)");
+            ins(OP_SCOPE_POP);
+        }
+        (void)updOff;
         std::string lSkip2 = newLabel("run_skip2");
         jumpTo(lSkip2);
         label(lSkip);
@@ -1770,7 +1734,7 @@ void CodeGen::emitEcs(Expr* e, FuncInstance* inst, const std::string& name, cons
         loadSlot(0, 4, t4);
         pushReg(0, 4);
         pushConst(4, 1);
-        ins(OP_ADD_U32);
+        insT(OP_ADD, TD_U32);
         popReg(0, 4);
         storeSlot(0, 4, t4);
         jumpTo(lTop);

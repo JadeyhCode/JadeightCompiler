@@ -20,6 +20,10 @@ public:
                   uint32_t& argSize, uint32_t& retSize, uint32_t& entry);
     uint32_t stackSizeForDisplay() const { return stackSize_; }
 
+    // v3 模块：汇编产出的函数目录 + 入口函数下标（driver 直接写 .bc 用）
+    std::vector<jadeight::ModuleFunc> moduleFuncs;
+    uint32_t entryFuncIndex = 0;
+
 private:
     Sema* sema_;
     CompileOptions& opts_;
@@ -37,14 +41,45 @@ private:
             counting = c; out = o; labels = lb; pc = 0; depth = 0; maxDepth = 0;
         }
         void ins(uint8_t op, const std::string& args = "", const std::string& comment = "") {
-            pc += static_cast<int>(jadeight::instrLen(op));
+            pc += static_cast<int>(jadeight::opLenFixed(op));
             if (!counting) {
                 *out += nameOf(op) + (args.empty() ? "" : " " + args) +
                         (comment.empty() ? "" : " ; " + comment) + "\n";
             }
         }
+        // ISA v3：类型是操作数（TypeDesc）。MOVI/PUSH_IMM 的长度还要加立即数宽度。
+        void insT(uint8_t op, uint8_t td, const std::string& args = "", const std::string& comment = "") {
+            int len = static_cast<int>(jadeight::opLenFixed(op));
+            if (op == jadeight::OP_MOVI || op == jadeight::OP_PUSH_IMM)
+                len += jadeight::tdBytes(td);
+            pc += len;
+            if (!counting) {
+                *out += nameOf(op) + " " + std::string(jadeight::tdName(td)) +
+                        (args.empty() ? "" : " " + args) +
+                        (comment.empty() ? "" : " ; " + comment) + "\n";
+            }
+        }
+        // ISA v3 的 CVT 同时带源/目标类型
+        void insCvt(uint8_t src, uint8_t dst, const std::string& comment = "") {
+            pc += 3;
+            if (!counting) {
+                *out += "CVT " + std::string(jadeight::tdName(src)) + ", " +
+                        std::string(jadeight::tdName(dst)) +
+                        (comment.empty() ? "" : " ; " + comment) + "\n";
+            }
+        }
+        // ISA v3 的 OP_CMP 带一个子操作（LT/LE/EQ/NE/GT/GE）
+        void insCmp(uint8_t sub, uint8_t td, const std::string& comment = "") {
+            static const char* names[] = {"LT", "LE", "EQ", "NE", "GT", "GE"};
+            pc += 3;
+            if (!counting) {
+                *out += "CMP " + std::string(names[sub & 7]) + " " + std::string(jadeight::tdName(td)) +
+                        (comment.empty() ? "" : " ; " + comment) + "\n";
+            }
+        }
         void label(const std::string& name) {
             if (counting) (*labels)[name] = pc;
+            else *out += name + ":\n";   // v3 用标签跳转：标签要真的写进汇编文本
         }
         void dataByte(uint64_t v) {
             if (counting) pc += 1;
@@ -58,7 +93,6 @@ private:
         void beginStmt() { depth = 0; }
 
         static std::string nameOf(uint8_t op);
-        static std::map<uint8_t, std::string> opNames;
     };
 
     Emitter em_;
@@ -99,6 +133,9 @@ private:
     void emitReturn(FuncInstance* inst);
 
     void ins(uint8_t op, const std::string& args = "", const std::string& comment = "") { em_.ins(op, args, comment); }
+    void insT(uint8_t op, uint8_t td, const std::string& args = "", const std::string& comment = "") { em_.insT(op, td, args, comment); }
+    void insCmp(uint8_t sub, uint8_t td, const std::string& comment = "") { em_.insCmp(sub, td, comment); }
+    void insCvt(uint8_t src, uint8_t dst, const std::string& comment = "") { em_.insCvt(src, dst, comment); }
     void label(const std::string& n) { em_.label(n); }
     void pushConst(int width, uint64_t value, const std::string& comment = "");
     void pushReg(int reg, int width);
